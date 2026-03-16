@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { readTextFile, writeTextFile } from '@tauri-apps/plugin-fs'
 import {
@@ -9,6 +9,9 @@ import {
   DropdownMenuTrigger,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu'
 import {
   Dialog,
@@ -19,7 +22,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import type { ThemeType } from './MilkdownEditor'
+import type { ThemeType, EditorActions } from './MilkdownEditor'
 
 interface ToolbarProps {
   content: string
@@ -27,24 +30,15 @@ interface ToolbarProps {
   onFileOpened?: () => void
   theme: ThemeType
   onThemeChange: (theme: ThemeType) => void
+  editorActionsRef?: React.RefObject<EditorActions | null>
 }
 
-function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange }: ToolbarProps) {
-  const editorRef = useRef<HTMLDivElement | null>(null)
-  const [aboutDialogOpen, setAboutDialogOpen] = React.useState(false)
-  const [shortcutsDialogOpen, setShortcutsDialogOpen] = React.useState(false)
-
-  // 获取编辑器实例
-  useEffect(() => {
-    // 延迟获取编辑器元素
-    const timer = setTimeout(() => {
-      const editor = document.querySelector('.milkdown')
-      if (editor) {
-        editorRef.current = editor as HTMLDivElement
-      }
-    }, 500)
-    return () => clearTimeout(timer)
-  }, [])
+function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange, editorActionsRef }: ToolbarProps) {
+  const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
+  const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false)
+  const [tableDialogOpen, setTableDialogOpen] = useState(false)
+  const [tableRows, setTableRows] = useState(3)
+  const [tableCols, setTableCols] = useState(3)
 
   const handleOpen = async () => {
     try {
@@ -90,13 +84,17 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
     onFileOpened?.()
   }
 
-  // 编辑操作
+  // 编辑操作 - 使用 editorActionsRef
   const handleUndo = () => {
-    document.execCommand('undo')
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.undo()
+    }
   }
 
   const handleRedo = () => {
-    document.execCommand('redo')
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.redo()
+    }
   }
 
   const handleCut = async () => {
@@ -119,7 +117,9 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
   const handlePaste = async () => {
     try {
       const text = await navigator.clipboard.readText()
-      document.execCommand('insertText', false, text)
+      if (editorActionsRef?.current) {
+        editorActionsRef.current.insertText(text)
+      }
     } catch (error) {
       console.error('Paste error:', error)
     }
@@ -129,34 +129,100 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
     document.execCommand('selectAll')
   }
 
-  // 格式化操作
+  // 格式化操作 - 使用 editorActionsRef
   const handleBold = () => {
-    document.execCommand('bold')
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.toggleBold()
+    }
   }
 
   const handleItalic = () => {
-    document.execCommand('italic')
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.toggleItalic()
+    }
   }
 
   const handleStrikeThrough = () => {
-    document.execCommand('strikeThrough')
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.toggleStrikeThrough()
+    }
   }
 
   const handleCode = () => {
-    document.execCommand('insertHTML', false, '<code>`</code>')
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.toggleCode()
+    }
+  }
+
+  const handleCodeBlock = (language?: string) => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertCodeBlock(language)
+    }
   }
 
   const handleLink = () => {
-    const url = prompt('请输入链接地址:')
-    if (url) {
-      document.execCommand('createLink', false, url)
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertLink()
     }
   }
 
   const handleImage = () => {
-    const url = prompt('请输入图片地址:')
-    if (url) {
-      document.execCommand('insertImage', false, url)
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertImage()
+    }
+  }
+
+  const handleTable = () => {
+    setTableDialogOpen(true)
+  }
+
+  const confirmInsertTable = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertTable(tableRows, tableCols)
+    }
+    setTableDialogOpen(false)
+  }
+
+  // 标题操作
+  const handleHeading = (level: number) => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertHeading(level)
+    }
+  }
+
+  const handleOrderedList = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertOrderedList()
+    }
+  }
+
+  const handleUnorderedList = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertUnorderedList()
+    }
+  }
+
+  const handleBlockquote = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertBlockquote()
+    }
+  }
+
+  const handleHorizontalRule = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertHorizontalRule()
+    }
+  }
+
+  const handleMathInline = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertMathInline()
+    }
+  }
+
+  const handleMathBlock = () => {
+    if (editorActionsRef?.current) {
+      editorActionsRef.current.insertMathBlock()
     }
   }
 
@@ -198,13 +264,90 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
             e.preventDefault()
             handleRedo()
             break
+          case 'k':
+            // Ctrl+Shift+K for image
+            if (e.shiftKey) {
+              e.preventDefault()
+              handleImage()
+            } else {
+              // Ctrl+K for link
+              e.preventDefault()
+              handleLink()
+            }
+            break
         }
+
+        // Ctrl+1~6 for headings
+        if (e.key >= '1' && e.key <= '6' && !e.shiftKey) {
+          e.preventDefault()
+          handleHeading(parseInt(e.key))
+        }
+
+        // Ctrl+Shift+M for code block
+        if (e.key.toLowerCase() === 'm' && e.shiftKey) {
+          e.preventDefault()
+          handleCodeBlock()
+        }
+
+        // Ctrl+` for inline code
+        if (e.key === '`' && !e.shiftKey) {
+          e.preventDefault()
+          handleCode()
+        }
+
+        // Ctrl+Shift+L for link
+        if (e.key.toLowerCase() === 'l' && e.shiftKey) {
+          e.preventDefault()
+          handleLink()
+        }
+
+        // Ctrl+Shift+7 for ordered list
+        if (e.key === '7' && e.shiftKey) {
+          e.preventDefault()
+          handleOrderedList()
+        }
+
+        // Ctrl+Shift+8 for unordered list
+        if (e.key === '8' && e.shiftKey) {
+          e.preventDefault()
+          handleUnorderedList()
+        }
+
+        // Ctrl+Shift+. for blockquote
+        if (e.key === '.' && e.shiftKey) {
+          e.preventDefault()
+          handleBlockquote()
+        }
+
+        // Ctrl+Shift+- for horizontal rule
+        if (e.key === '-' && e.shiftKey) {
+          e.preventDefault()
+          handleHorizontalRule()
+        }
+
+        // Ctrl+Shift+P for inline math
+        if (e.key.toLowerCase() === 'p' && e.shiftKey) {
+          e.preventDefault()
+          handleMathInline()
+        }
+
+        // Ctrl+Shift+Enter for block math
+        if (e.key === 'Enter' && e.shiftKey) {
+          e.preventDefault()
+          handleMathBlock()
+        }
+      }
+
+      // Alt+Shift+5 for strikethrough
+      if (e.altKey && e.shiftKey && e.key === '5') {
+        e.preventDefault()
+        handleStrikeThrough()
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [content])
+  }, [content, editorActionsRef])
 
   return (
     <>
@@ -311,6 +454,37 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
             格式
           </DropdownMenuTrigger>
           <DropdownMenuContent>
+            {/* 标题子菜单 */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>标题</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={() => handleHeading(1)}>
+                  一级标题
+                  <DropdownMenuShortcut>Ctrl+1</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleHeading(2)}>
+                  二级标题
+                  <DropdownMenuShortcut>Ctrl+2</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleHeading(3)}>
+                  三级标题
+                  <DropdownMenuShortcut>Ctrl+3</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleHeading(4)}>
+                  四级标题
+                  <DropdownMenuShortcut>Ctrl+4</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleHeading(5)}>
+                  五级标题
+                  <DropdownMenuShortcut>Ctrl+5</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleHeading(6)}>
+                  六级标题
+                  <DropdownMenuShortcut>Ctrl+6</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleBold}>
               粗体
               <DropdownMenuShortcut>Ctrl+B</DropdownMenuShortcut>
@@ -321,17 +495,119 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleStrikeThrough}>
               删除线
+              <DropdownMenuShortcut>Alt+Shift+5</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleCode}>
-              代码
+              行内代码
+              <DropdownMenuShortcut>Ctrl+`</DropdownMenuShortcut>
             </DropdownMenuItem>
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                代码块
+                <DropdownMenuShortcut>Ctrl+Shift+M</DropdownMenuShortcut>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={() => handleCodeBlock()}>
+                  无语言
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('javascript')}>
+                  JavaScript
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('typescript')}>
+                  TypeScript
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('python')}>
+                  Python
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('java')}>
+                  Java
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('cpp')}>
+                  C++
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('go')}>
+                  Go
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('rust')}>
+                  Rust
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('html')}>
+                  HTML
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('css')}>
+                  CSS
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('json')}>
+                  JSON
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('yaml')}>
+                  YAML
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('markdown')}>
+                  Markdown
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('sql')}>
+                  SQL
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('bash')}>
+                  Bash
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('xml')}>
+                  XML
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('csharp')}>
+                  C#
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => handleCodeBlock('php')}>
+                  PHP
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleOrderedList}>
+              有序列表
+              <DropdownMenuShortcut>Ctrl+Shift+7</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleUnorderedList}>
+              无序列表
+              <DropdownMenuShortcut>Ctrl+Shift+8</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleBlockquote}>
+              引用
+              <DropdownMenuShortcut>Ctrl+Shift+.</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLink}>
               链接
+              <DropdownMenuShortcut>Ctrl+K</DropdownMenuShortcut>
             </DropdownMenuItem>
             <DropdownMenuItem onClick={handleImage}>
-              图像
+              图片
+              <DropdownMenuShortcut>Ctrl+Shift+K</DropdownMenuShortcut>
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={handleHorizontalRule}>
+              水平线
+              <DropdownMenuShortcut>Ctrl+Shift+-</DropdownMenuShortcut>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleTable}>
+              表格
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>数学公式</DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem onClick={handleMathInline}>
+                  行内公式
+                  <DropdownMenuShortcut>Ctrl+Shift+P</DropdownMenuShortcut>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={handleMathBlock}>
+                  块级公式
+                  <DropdownMenuShortcut>Ctrl+Shift+Enter</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
           </DropdownMenuContent>
         </DropdownMenu>
 
@@ -403,11 +679,11 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
 
       {/* 快捷键对话框 */}
       <Dialog open={shortcutsDialogOpen} onOpenChange={setShortcutsDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>快捷键列表</DialogTitle>
           </DialogHeader>
-          <div className="py-4 space-y-2">
+          <div className="py-4 space-y-3">
             <div className="flex justify-between text-sm">
               <span>新建文件</span>
               <span className="text-muted-foreground">Ctrl+N</span>
@@ -434,6 +710,32 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
               <span className="text-muted-foreground">Ctrl+Y</span>
             </div>
             <DropdownMenuSeparator />
+            <div className="text-sm font-medium mt-2">标题</div>
+            <div className="flex justify-between text-sm">
+              <span>一级标题</span>
+              <span className="text-muted-foreground">Ctrl+1</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>二级标题</span>
+              <span className="text-muted-foreground">Ctrl+2</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>三级标题</span>
+              <span className="text-muted-foreground">Ctrl+3</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>四级标题</span>
+              <span className="text-muted-foreground">Ctrl+4</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>五级标题</span>
+              <span className="text-muted-foreground">Ctrl+5</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>六级标题</span>
+              <span className="text-muted-foreground">Ctrl+6</span>
+            </div>
+            <DropdownMenuSeparator />
             <div className="flex justify-between text-sm">
               <span>粗体</span>
               <span className="text-muted-foreground">Ctrl+B</span>
@@ -442,9 +744,96 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange 
               <span>斜体</span>
               <span className="text-muted-foreground">Ctrl+I</span>
             </div>
+            <div className="flex justify-between text-sm">
+              <span>删除线</span>
+              <span className="text-muted-foreground">Alt+Shift+5</span>
+            </div>
+            <DropdownMenuSeparator />
+            <div className="flex justify-between text-sm">
+              <span>行内代码</span>
+              <span className="text-muted-foreground">Ctrl+`</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>代码块</span>
+              <span className="text-muted-foreground">Ctrl+Shift+M</span>
+            </div>
+            <DropdownMenuSeparator />
+            <div className="flex justify-between text-sm">
+              <span>有序列表</span>
+              <span className="text-muted-foreground">Ctrl+Shift+7</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>无序列表</span>
+              <span className="text-muted-foreground">Ctrl+Shift+8</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>引用</span>
+              <span className="text-muted-foreground">Ctrl+Shift+.</span>
+            </div>
+            <DropdownMenuSeparator />
+            <div className="flex justify-between text-sm">
+              <span>链接</span>
+              <span className="text-muted-foreground">Ctrl+K</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>图片</span>
+              <span className="text-muted-foreground">Ctrl+Shift+K</span>
+            </div>
+            <DropdownMenuSeparator />
+            <div className="flex justify-between text-sm">
+              <span>水平线</span>
+              <span className="text-muted-foreground">Ctrl+Shift+-</span>
+            </div>
+            <DropdownMenuSeparator />
+            <div className="text-sm font-medium mt-2">数学公式</div>
+            <div className="flex justify-between text-sm">
+              <span>行内公式</span>
+              <span className="text-muted-foreground">Ctrl+Shift+P</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span>块级公式</span>
+              <span className="text-muted-foreground">Ctrl+Shift+Enter</span>
+            </div>
           </div>
           <DialogFooter>
             <Button onClick={() => setShortcutsDialogOpen(false)}>关闭</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 表格对话框 */}
+      <Dialog open={tableDialogOpen} onOpenChange={setTableDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>插入表格</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            <div className="flex items-center gap-4">
+              <label className="text-sm">行数:</label>
+              <input
+                type="number"
+                min="2"
+                max="10"
+                value={tableRows}
+                onChange={(e) => setTableRows(parseInt(e.target.value) || 3)}
+                className="w-20 px-2 py-1 border rounded"
+              />
+            </div>
+            <div className="flex items-center gap-4">
+              <label className="text-sm">列数:</label>
+              <input
+                type="number"
+                min="2"
+                max="10"
+                value={tableCols}
+                onChange={(e) => setTableCols(parseInt(e.target.value) || 3)}
+                className="w-20 px-2 py-1 border rounded"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTableDialogOpen(false)}>取消</Button>
+            <Button onClick={confirmInsertTable}>插入</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -460,7 +849,5 @@ function DropdownMenuShortcut({ children }: { children: React.ReactNode }) {
     </span>
   )
 }
-
-import React from 'react'
 
 export default Toolbar

@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import MilkdownEditor, { ThemeType } from './components/MilkdownEditor'
+import MilkdownEditor, { ThemeType, EditorActions } from './components/MilkdownEditor'
 import Toolbar from './components/Toolbar'
 
 function App() {
@@ -7,6 +7,8 @@ function App() {
   const [theme, setTheme] = useState<ThemeType>('nord')
   // Use a ref to track editor key - only changes when file is opened
   const editorKeyRef = useRef(0)
+  // Ref for editor actions that can be used by Toolbar
+  const editorActionsRef = useRef<EditorActions>(null)
 
   const handleContentChange = (newContent: string) => {
     setContent(newContent)
@@ -25,6 +27,7 @@ function App() {
         onFileOpened={handleFileOpened}
         theme={theme}
         onThemeChange={setTheme}
+        editorActionsRef={editorActionsRef}
       />
       <main className="flex-1 overflow-auto p-6 editor-container">
         <MilkdownEditor
@@ -32,6 +35,7 @@ function App() {
           initialValue={content}
           onChange={setContent}
           theme={theme}
+          editorRef={editorActionsRef}
         />
       </main>
     </div>

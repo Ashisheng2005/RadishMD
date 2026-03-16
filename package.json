@@ -14,6 +14,7 @@
     "@milkdown/plugin-clipboard": "^7.19.0",
     "@milkdown/plugin-history": "^7.19.0",
     "@milkdown/plugin-listener": "^7.19.0",
+    "@milkdown/plugin-prism": "^7.19.0",
     "@milkdown/preset-commonmark": "^7.19.0",
     "@milkdown/preset-gfm": "^7.19.0",
     "@milkdown/theme-nord": "^7.19.0",
@@ -29,8 +30,10 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",
+    "prismjs": "^1.30.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "refractor": "^5.0.0",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.1"
   },
