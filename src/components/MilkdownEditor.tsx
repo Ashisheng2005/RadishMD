@@ -91,6 +91,15 @@ function MilkdownEditor({
   // State for search query in language selector
   const [languageSearch, setLanguageSearch] = useState('')
 
+  // State for keyboard navigation in language selector
+  const [selectedIndex, setSelectedIndex] = useState(0)
+
+  // Flag to prevent selection listener from re-opening selector after close
+  const isClosingRef = useRef(false)
+
+  // Track if user has selected a language for the current code block
+  const hasSelectedLanguageRef = useRef(false)
+
   // Keep onChange ref up to date
   useEffect(() => {
     onChangeRef.current = onChange
@@ -108,6 +117,9 @@ function MilkdownEditor({
     const node = state.doc.nodeAt(pos)
     if (!node || node.type.name !== 'code_block') return
 
+    // Focus editor first
+    view.focus()
+
     // Create transaction to update the node's language attribute
     // Use empty string for "no language" to match Milkdown/Prism expectations
     const newAttrs = {
@@ -117,13 +129,24 @@ function MilkdownEditor({
     const tr = state.tr.setNodeMarkup(pos, undefined, newAttrs)
     dispatch(tr)
 
-    closeLanguageSelector()
+    closeLanguageSelector(true)
   }
 
   // Clear search when selector closes
-  const closeLanguageSelector = () => {
+  const closeLanguageSelector = (keepClosed = false) => {
+    // Set flag to prevent selection listener from re-opening selector
+    isClosingRef.current = true
+    if (keepClosed) {
+      hasSelectedLanguageRef.current = true
+    }
     setLanguageSearch('')
+    setSelectedIndex(0)
     setActiveCodeBlock(null)
+
+    // Reset flag after a short delay
+    setTimeout(() => {
+      isClosingRef.current = false
+    }, 100)
   }
 
   // Add click and focus listeners when component mounts
@@ -153,6 +176,7 @@ function MilkdownEditor({
               const rect = domNode.getBoundingClientRect()
               const lang = node.attrs.language || ''
               setActiveCodeBlock({ pos, lang, rect })
+              setSelectedIndex(0)
               return
             }
           } catch (e) {
@@ -171,6 +195,7 @@ function MilkdownEditor({
               const rect = codeBlockEl.getBoundingClientRect()
               const lang = node.attrs.language || ''
               setActiveCodeBlock({ pos, lang, rect })
+              setSelectedIndex(0)
               return
             }
           }
@@ -179,6 +204,7 @@ function MilkdownEditor({
           const rect = div.getBoundingClientRect()
           const lang = node.attrs.language || ''
           setActiveCodeBlock({ pos, lang, rect })
+          setSelectedIndex(0)
         }
       } else {
         // Cursor is not in a code block
@@ -188,6 +214,9 @@ function MilkdownEditor({
 
     // Handle selection changes - detect when cursor enters/leaves code block
     const handleSelectionChange = () => {
+      // Skip if selector is being closed or user already selected a language
+      if (isClosingRef.current || hasSelectedLanguageRef.current) return
+
       // Only process if selection is inside our editor
       const selection = window.getSelection()
       if (!selection || selection.rangeCount === 0) return
@@ -200,6 +229,12 @@ function MilkdownEditor({
 
     // Also handle click to update position when clicking inside code block
     const handleEditorClick = () => {
+      // Skip if selector is being closed
+      if (isClosingRef.current) return
+
+      // Allow selector to show on click (user wants to change language)
+      hasSelectedLanguageRef.current = false
+
       updateCodeBlockState()
     }
 
@@ -275,6 +310,50 @@ function MilkdownEditor({
           const tr = state.tr.delete(pos, pos + 1)
           dispatch(tr)
         }
+
+        // After creating code block, auto-show language selector
+        setTimeout(() => {
+          const { state: newState } = view
+          const { $from: newFrom } = newState.selection
+
+          if (newFrom.parent.type.name === 'code_block') {
+            const pos = newFrom.before(newFrom.depth)
+            const node = newState.doc.nodeAt(pos)
+
+            if (node && node.type.name === 'code_block') {
+              // Reset flag for new code block
+              hasSelectedLanguageRef.current = false
+
+              try {
+                const domNode = view.nodeDOM(pos) as HTMLElement
+                if (domNode) {
+                  const rect = domNode.getBoundingClientRect()
+                  const lang = node.attrs.language || ''
+                  setActiveCodeBlock({ pos, lang, rect })
+                  setSelectedIndex(0)
+                  setLanguageSearch('')
+                }
+              } catch (e) {
+                // Fallback: find code block by DOM element
+                const selection = window.getSelection()
+                if (selection && selection.rangeCount > 0) {
+                  const range = selection.getRangeAt(0)
+                  const container = range.commonAncestorContainer as HTMLElement
+                  const codeBlockEl = container.closest?.('pre') ||
+                    container.parentElement?.closest?.('pre')
+
+                  if (codeBlockEl) {
+                    const rect = codeBlockEl.getBoundingClientRect()
+                    const lang = node.attrs.language || ''
+                    setActiveCodeBlock({ pos, lang, rect })
+                    setSelectedIndex(0)
+                    setLanguageSearch('')
+                  }
+                }
+              }
+            }
+          }
+        }, 50)
       } else {
         // Fallback to markdown insertion
         const codeBlock = '\n```' + (language || '') + '\ncode here\n```\n'
@@ -504,7 +583,34 @@ function MilkdownEditor({
         className={`max-w-3xl mx-auto rounded-lg p-6 min-h-[500px] ${getThemeClass()}`}
       />
       {/* Code block language selector */}
-      {activeCodeBlock && (
+      {activeCodeBlock && (() => {
+        // Filter languages based on search
+        const filteredLanguages = CODE_LANGUAGES.filter(lang =>
+          lang.label.toLowerCase().includes(languageSearch.toLowerCase()) ||
+          lang.value.toLowerCase().includes(languageSearch.toLowerCase())
+        )
+
+        // Handle keyboard navigation
+        const handleKeyDown = (e: React.KeyboardEvent) => {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setSelectedIndex(prev => Math.min(prev + 1, filteredLanguages.length - 1))
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setSelectedIndex(prev => Math.max(prev - 1, 0))
+          } else if (e.key === 'Enter') {
+            e.preventDefault()
+            if (filteredLanguages.length > 0) {
+              updateCodeBlockLanguage(filteredLanguages[selectedIndex].value)
+              setLanguageSearch('')
+            }
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            closeLanguageSelector()
+          }
+        }
+
+        return (
         <div
           style={{
             position: 'fixed',
@@ -522,7 +628,11 @@ function MilkdownEditor({
               type="text"
               placeholder={activeCodeBlock.lang !== undefined ? CODE_LANGUAGES.find(l => l.value === activeCodeBlock.lang)?.label || activeCodeBlock.lang || "无语言" : "输入搜索语言..."}
               value={languageSearch}
-              onChange={(e) => setLanguageSearch(e.target.value)}
+              onChange={(e) => {
+                setLanguageSearch(e.target.value)
+                setSelectedIndex(0)
+              }}
+              onKeyDown={handleKeyDown}
               className="w-full text-xs px-2 py-1.5 border rounded-md outline-none focus:border-blue-500 bg-transparent"
               autoFocus
             />
@@ -530,19 +640,18 @@ function MilkdownEditor({
           {/* Language options - only show when there's a search query */}
           {languageSearch && (
             <div className="max-h-[200px] overflow-y-auto border-t">
-              {CODE_LANGUAGES.filter(lang =>
-                lang.label.toLowerCase().includes(languageSearch.toLowerCase()) ||
-                lang.value.toLowerCase().includes(languageSearch.toLowerCase())
-              ).map((lang) => (
+              {filteredLanguages.map((lang, index) => (
                 <button
                   key={lang.value}
                   className={`w-full text-xs px-3 py-1.5 text-left hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 ${
+                    index === selectedIndex ? 'bg-blue-100 dark:bg-blue-800' :
                     activeCodeBlock.lang === lang.value ? 'bg-gray-100 dark:bg-gray-700' : ''
                   }`}
                   onClick={() => {
                     updateCodeBlockLanguage(lang.value)
                     setLanguageSearch('')
                   }}
+                  onMouseEnter={() => setSelectedIndex(index)}
                 >
                   {activeCodeBlock.lang === lang.value && (
                     <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
@@ -552,16 +661,14 @@ function MilkdownEditor({
                   {lang.label}
                 </button>
               ))}
-              {CODE_LANGUAGES.filter(lang =>
-                lang.label.toLowerCase().includes(languageSearch.toLowerCase()) ||
-                lang.value.toLowerCase().includes(languageSearch.toLowerCase())
-              ).length === 0 && (
+              {filteredLanguages.length === 0 && (
                 <div className="text-xs px-3 py-2 text-gray-500">未找到匹配的语言</div>
               )}
             </div>
           )}
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
