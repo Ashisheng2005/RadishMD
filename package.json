@@ -17,6 +17,8 @@
     "@milkdown/preset-commonmark": "^7.19.0",
     "@milkdown/preset-gfm": "^7.19.0",
     "@milkdown/theme-nord": "^7.19.0",
+    "@radix-ui/react-dialog": "^1.1.6",
+    "@radix-ui/react-dropdown-menu": "^2.1.6",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
     "@tailwindcss/vite": "^4.2.1",

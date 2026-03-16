@@ -1,10 +1,10 @@
 import { useState, useRef } from 'react'
-import MilkdownEditor from './components/MilkdownEditor'
+import MilkdownEditor, { ThemeType } from './components/MilkdownEditor'
 import Toolbar from './components/Toolbar'
 
 function App() {
   const [content, setContent] = useState('# Hello World\n\nStart typing your markdown here...')
-  const [theme, setTheme] = useState<'nord' | 'light'>('nord')
+  const [theme, setTheme] = useState<ThemeType>('nord')
   // Use a ref to track editor key - only changes when file is opened
   const editorKeyRef = useRef(0)
 
@@ -18,12 +18,7 @@ function App() {
   }
 
   return (
-    <div className={`h-screen flex flex-col ${theme === 'light' ? 'bg-white' : 'bg-slate-950'}`}>
-      <header className={`px-6 py-4 border-b ${theme === 'light' ? 'bg-gray-100 border-gray-200' : 'bg-slate-900 border-slate-800'}`}>
-        <h1 className={`text-xl font-semibold ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>
-          Markdown Editor
-        </h1>
-      </header>
+    <div className="h-screen flex flex-col" data-theme={theme}>
       <Toolbar
         content={content}
         onContentChange={handleContentChange}
@@ -31,7 +26,7 @@ function App() {
         theme={theme}
         onThemeChange={setTheme}
       />
-      <main className={`flex-1 overflow-auto p-6 ${theme === 'light' ? 'bg-gray-50' : 'bg-slate-950'}`}>
+      <main className="flex-1 overflow-auto p-6 editor-container">
         <MilkdownEditor
           key={editorKeyRef.current}
           initialValue={content}

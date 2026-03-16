@@ -25,12 +25,157 @@
   --radius: 0.5rem;
 }
 
+/* Theme: Light (默认) */
+[data-theme="light"] {
+  --color-background: #ffffff;
+  --color-foreground: #1a1a1a;
+  --color-border: #e5e7eb;
+  --color-muted: #f9fafb;
+  --color-muted-foreground: #6b7280;
+  --color-accent: #f3f4f6;
+  --color-accent-foreground: #1a1a1a;
+  --color-popover: #ffffff;
+  --color-popover-foreground: #1a1a1a;
+  --color-card: #ffffff;
+  --color-card-foreground: #1a1a1a;
+  --color-primary: #1a1a1a;
+  --color-primary-foreground: #ffffff;
+  --color-secondary: #f3f4f6;
+  --color-secondary-foreground: #1a1a1a;
+  --color-input: #e5e7eb;
+}
+
+/* Theme: Nord (蓝灰色调) */
+[data-theme="nord"] {
+  --color-background: #2e3440;
+  --color-foreground: #eceff4;
+  --color-border: #3b4252;
+  --color-muted: #3b4252;
+  --color-muted-foreground: #d8dee9;
+  --color-accent: #434c5e;
+  --color-accent-foreground: #eceff4;
+  --color-popover: #3b4252;
+  --color-popover-foreground: #eceff4;
+  --color-card: #3b4252;
+  --color-card-foreground: #eceff4;
+  --color-primary: #88c0d0;
+  --color-primary-foreground: #2e3440;
+  --color-secondary: #434c5e;
+  --color-secondary-foreground: #eceff4;
+  --color-input: #4c566a;
+}
+
+/* Theme: Dark (VS Code 深灰色调) */
+[data-theme="dark"] {
+  --color-background: #1e1e1e;
+  --color-foreground: #d4d4d4;
+  --color-border: #3c3c3c;
+  --color-muted: #252526;
+  --color-muted-foreground: #858585;
+  --color-accent: #2d2d2d;
+  --color-accent-foreground: #d4d4d4;
+  --color-popover: #252526;
+  --color-popover-foreground: #d4d4d4;
+  --color-card: #252526;
+  --color-card-foreground: #d4d4d4;
+  --color-primary: #569cd6;
+  --color-primary-foreground: #1e1e1e;
+  --color-secondary: #2d2d2d;
+  --color-secondary-foreground: #d4d4d4;
+  --color-input: #3c3c3c;
+}
+
+/* Theme: Warm (Typora 暖灰色调) */
+[data-theme="warm"] {
+  --color-background: #1d1d1d;
+  --color-foreground: #bbbbbb;
+  --color-border: #333333;
+  --color-muted: #252525;
+  --color-muted-foreground: #888888;
+  --color-accent: #2a2a2a;
+  --color-accent-foreground: #bbbbbb;
+  --color-popover: #252525;
+  --color-popover-foreground: #bbbbbb;
+  --color-card: #252525;
+  --color-card-foreground: #bbbbbb;
+  --color-primary: #fcba03;
+  --color-primary-foreground: #1d1d1d;
+  --color-secondary: #2a2a2a;
+  --color-secondary-foreground: #bbbbbb;
+  --color-input: #333333;
+}
+
 @layer base {
   * {
     border-color: var(--color-border);
   }
   body {
-    background-color: var(--background);
-    color: var(--foreground);
+    background-color: var(--color-background);
+    color: var(--color-foreground);
   }
+}
+
+/* 自定义菜单栏样式 */
+.menu-bar {
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  height: 36px;
+  background-color: var(--color-background);
+  border-bottom: 1px solid var(--color-border);
+  user-select: none;
+}
+
+.menu-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 4px 12px;
+  font-size: 13px;
+  color: var(--color-foreground);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.menu-item:hover {
+  background-color: var(--color-accent);
+}
+
+/* 下拉菜单样式 */
+[data-radix-dropdown-menu-content] {
+  background-color: var(--color-popover) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-popover-foreground) !important;
+}
+
+.dropdown-menu-item {
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.dropdown-menu-item:hover {
+  background-color: var(--color-accent);
+}
+
+/* 编辑器容器样式 */
+.editor-container {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+}
+
+/* Milkdown 主题覆盖 */
+[data-theme="light"] .milkdown {
+  --editor-background: #ffffff;
+  --editor-foreground: #1a1a1a;
+}
+
+[data-theme="nord"] .milkdown,
+[data-theme="dark"] .milkdown,
+[data-theme="warm"] .milkdown {
+  --editor-background: var(--color-background);
+  --editor-foreground: var(--color-foreground);
 }
