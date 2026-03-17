@@ -100,6 +100,9 @@ function MilkdownEditor({
   // Track if user has selected a language for the current code block
   const hasSelectedLanguageRef = useRef(false)
 
+  // Track the last newly created code block position (for first click detection)
+  const lastCreatedCodeBlockRef = useRef<number | null>(null)
+
   // Keep onChange ref up to date
   useEffect(() => {
     onChangeRef.current = onChange
@@ -139,6 +142,8 @@ function MilkdownEditor({
     if (keepClosed) {
       hasSelectedLanguageRef.current = true
     }
+    // Clear the last created code block ref to prevent re-triggering on cursor movement
+    lastCreatedCodeBlockRef.current = null
     setLanguageSearch('')
     setSelectedIndex(0)
     setActiveCodeBlock(null)
@@ -217,6 +222,23 @@ function MilkdownEditor({
       // Skip if selector is being closed or user already selected a language
       if (isClosingRef.current || hasSelectedLanguageRef.current) return
 
+      const view = editorViewRef.current
+      if (!view) return
+
+      const { state } = view
+      const { $from } = state.selection
+
+      // Check if cursor is in a code block
+      if ($from.parent.type.name === 'code_block') {
+        const pos = $from.before($from.depth)
+
+        // Only show selector for first click on newly created code block
+        // Skip for imported code blocks or subsequent clicks
+        if (pos !== lastCreatedCodeBlockRef.current) {
+          return
+        }
+      }
+
       // Only process if selection is inside our editor
       const selection = window.getSelection()
       if (!selection || selection.rangeCount === 0) return
@@ -232,10 +254,30 @@ function MilkdownEditor({
       // Skip if selector is being closed
       if (isClosingRef.current) return
 
-      // Allow selector to show on click (user wants to change language)
-      hasSelectedLanguageRef.current = false
+      const view = editorViewRef.current
+      if (!view) return
 
-      updateCodeBlockState()
+      const { state } = view
+      const { $from } = state.selection
+
+      // Check if cursor is in a code block
+      if ($from.parent.type.name === 'code_block') {
+        const pos = $from.before($from.depth)
+
+        // Check if this is the first click on a newly created code block
+        if (pos === lastCreatedCodeBlockRef.current) {
+          // First click on manually created code block - show selector
+          hasSelectedLanguageRef.current = false
+          updateCodeBlockState()
+          // Clear the ref so subsequent clicks won't trigger
+          lastCreatedCodeBlockRef.current = null
+          return
+        }
+
+        // For other manually created code blocks (already clicked once): don't show
+        // For imported code blocks (not in touched set): don't show
+        // Both cases are handled by not showing the selector
+      }
     }
 
     // Handle keyboard events
@@ -323,6 +365,9 @@ function MilkdownEditor({
             if (node && node.type.name === 'code_block') {
               // Reset flag for new code block
               hasSelectedLanguageRef.current = false
+
+              // Mark this as the last created code block (for first click detection)
+              lastCreatedCodeBlockRef.current = pos
 
               try {
                 const domNode = view.nodeDOM(pos) as HTMLElement

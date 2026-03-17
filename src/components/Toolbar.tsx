@@ -27,13 +27,14 @@ import type { ThemeType, EditorActions } from './MilkdownEditor'
 interface ToolbarProps {
   content: string
   onContentChange: (content: string) => void
-  onFileOpened?: () => void
+  onFileOpened?: (filePath?: string) => void
+  currentFilePath?: string | null
   theme: ThemeType
   onThemeChange: (theme: ThemeType) => void
   editorActionsRef?: React.RefObject<EditorActions | null>
 }
 
-function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange, editorActionsRef }: ToolbarProps) {
+function Toolbar({ content, onContentChange, onFileOpened, currentFilePath, theme, onThemeChange, editorActionsRef }: ToolbarProps) {
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false)
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false)
   const [tableDialogOpen, setTableDialogOpen] = useState(false)
@@ -52,7 +53,7 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange,
       if (selected) {
         const fileContent = await readTextFile(selected)
         onContentChange(fileContent)
-        onFileOpened?.()
+        onFileOpened?.(selected)
       }
     } catch (error) {
       console.error('Error opening file:', error)
@@ -60,6 +61,29 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange,
   }
 
   const handleSave = async () => {
+    try {
+      // If we have a current file path, save directly to it
+      if (currentFilePath) {
+        await writeTextFile(currentFilePath, content)
+      } else {
+        // Otherwise, use Save As dialog
+        const selected = await save({
+          filters: [{
+            name: 'Markdown',
+            extensions: ['md']
+          }]
+        })
+        if (selected) {
+          await writeTextFile(selected, content)
+          onFileOpened?.(selected)
+        }
+      }
+    } catch (error) {
+      console.error('Error saving file:', error)
+    }
+  }
+
+  const handleSaveAs = async () => {
     try {
       const selected = await save({
         filters: [{
@@ -69,14 +93,11 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange,
       })
       if (selected) {
         await writeTextFile(selected, content)
+        onFileOpened?.(selected)
       }
     } catch (error) {
       console.error('Error saving file:', error)
     }
-  }
-
-  const handleSaveAs = async () => {
-    await handleSave()
   }
 
   const handleNewFile = () => {
@@ -502,68 +523,10 @@ function Toolbar({ content, onContentChange, onFileOpened, theme, onThemeChange,
               行内代码
               <DropdownMenuShortcut>Ctrl+`</DropdownMenuShortcut>
             </DropdownMenuItem>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                代码块
-                <DropdownMenuShortcut>Ctrl+Shift+M</DropdownMenuShortcut>
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onClick={() => handleCodeBlock()}>
-                  无语言
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('javascript')}>
-                  JavaScript
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('typescript')}>
-                  TypeScript
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('python')}>
-                  Python
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('java')}>
-                  Java
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('cpp')}>
-                  C++
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('go')}>
-                  Go
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('rust')}>
-                  Rust
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('html')}>
-                  HTML
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('css')}>
-                  CSS
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('json')}>
-                  JSON
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('yaml')}>
-                  YAML
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('markdown')}>
-                  Markdown
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('sql')}>
-                  SQL
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('bash')}>
-                  Bash
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('xml')}>
-                  XML
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('csharp')}>
-                  C#
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleCodeBlock('php')}>
-                  PHP
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+            <DropdownMenuItem onClick={() => handleCodeBlock()}>
+              代码块
+              <DropdownMenuShortcut>Ctrl+Shift+M</DropdownMenuShortcut>
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleOrderedList}>
               有序列表

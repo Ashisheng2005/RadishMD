@@ -5,6 +5,8 @@ import Toolbar from './components/Toolbar'
 function App() {
   const [content, setContent] = useState('# Hello World\n\nStart typing your markdown here...')
   const [theme, setTheme] = useState<ThemeType>('nord')
+  // Track current file path for save functionality
+  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null)
   // Use a ref to track editor key - only changes when file is opened
   const editorKeyRef = useRef(0)
   // Ref for editor actions that can be used by Toolbar
@@ -14,9 +16,13 @@ function App() {
     setContent(newContent)
   }
 
-  const handleFileOpened = () => {
+  const handleFileOpened = (filePath?: string) => {
     // Increment key to force re-create editor when file is opened
     editorKeyRef.current += 1
+    // Update current file path if provided
+    if (filePath) {
+      setCurrentFilePath(filePath)
+    }
   }
 
   return (
@@ -25,6 +31,7 @@ function App() {
         content={content}
         onContentChange={handleContentChange}
         onFileOpened={handleFileOpened}
+        currentFilePath={currentFilePath}
         theme={theme}
         onThemeChange={setTheme}
         editorActionsRef={editorActionsRef}
