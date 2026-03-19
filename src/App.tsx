@@ -1,29 +1,18 @@
-import { useState, useRef } from 'react'
-import MilkdownEditor, { ThemeType, EditorActions } from './components/MilkdownEditor'
+import MilkdownEditor from './components/MilkdownEditor'
 import Toolbar from './components/Toolbar'
+import { useEditorWorkspace } from './hooks/useEditorWorkspace'
 
 function App() {
-  const [content, setContent] = useState('# Hello World\n\nStart typing your markdown here...')
-  const [theme, setTheme] = useState<ThemeType>('nord')
-  // Track current file path for save functionality
-  const [currentFilePath, setCurrentFilePath] = useState<string | null>(null)
-  // Use a ref to track editor key - only changes when file is opened
-  const editorKeyRef = useRef(0)
-  // Ref for editor actions that can be used by Toolbar
-  const editorActionsRef = useRef<EditorActions>(null)
-
-  const handleContentChange = (newContent: string) => {
-    setContent(newContent)
-  }
-
-  const handleFileOpened = (filePath?: string) => {
-    // Increment key to force re-create editor when file is opened
-    editorKeyRef.current += 1
-    // Update current file path if provided
-    if (filePath) {
-      setCurrentFilePath(filePath)
-    }
-  }
+  const {
+    content,
+    theme,
+    currentFilePath,
+    editorKey,
+    editorActionsRef,
+    handleContentChange,
+    handleFileOpened,
+    setTheme,
+  } = useEditorWorkspace()
 
   return (
     <div className="h-screen flex flex-col" data-theme={theme}>
@@ -38,9 +27,9 @@ function App() {
       />
       <main className="flex-1 overflow-auto p-6 editor-container">
         <MilkdownEditor
-          key={editorKeyRef.current}
+          key={editorKey}
           initialValue={content}
-          onChange={setContent}
+          onChange={handleContentChange}
           theme={theme}
           editorRef={editorActionsRef}
         />
