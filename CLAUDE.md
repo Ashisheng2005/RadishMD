@@ -22,42 +22,58 @@ npm run tauri build    # Build production Tauri app (outputs .exe)
 ## Architecture
 
 **Frontend Stack:**
-- Vite 7 + React 19 + TypeScript
-- Tailwind CSS 4 (using `@tailwindcss/vite` plugin)
+- Vite 7 + React 19 + TypeScript (import alias: `@` maps to `./src`)
+- Tailwind CSS 4 with CSS variables (`@tailwindcss/vite` plugin, `@theme inline` in `src/index.css`)
+- shadcn/ui component library (radix-ui primitives + class-variance-authority)
 - Zustand for state management
-- shadcn/ui component library (located in `src/components/ui/`)
+- `sonner` for toast notifications
+- CodeMirror 6 packages in dependencies (unused - WYSIWYG uses custom `contenteditable` blocks)
 
 **Backend (Rust):**
-- Tauri 2 framework
-- Plugins: `tauri-plugin-opener` (external links), `tauri-plugin-dialog` (file dialogs)
+- Tauri 2 framework with plugins: `tauri-plugin-opener` (external links), `tauri-plugin-dialog` (file dialogs)
+- Entry point: `src-tauri/src/main.rs` → `lib.rs:run()`
 - Commands in `src-tauri/src/lib.rs`: `read_file`, `write_file`, `get_file_name`
 
-**State Management:**
-- `src/lib/editor-store.ts` - Zustand store managing:
-  - File tree and active file
-  - Editor content
-  - UI toggles (sidebar, outline, theme)
-  - Word/character counts
+**State Management** (`src/lib/editor-store.ts`):
+- File tree (`files: FileNode[]`) with `filePath` for imported files
+- Active file tracking and editor content
+- `saveFile()`: direct save for imported files, Save As for new files
+- `saveFileAs()`: always opens Save As dialog
+- UI toggles: `isSidebarOpen`, `isOutlineOpen`, `theme`, `editMode`
+- Inline creation workflow: `creatingType` ("file" | "folder" | null) triggers `InlineCreateInput` in `file-tree.tsx`
+- `editMode`: "split" | "wysiwyg" - toggles between split-pane and WYSIWYG editing
 
-**Editor Components** (`src/components/editor/`):
-- `index.tsx` - Main Editor container
-- `editor-area.tsx` - Split editor/preview panes
-- `markdown-renderer.tsx` - Markdown to HTML rendering
-- `toolbar.tsx` - Formatting toolbar
-- `title-bar.tsx` - Top bar with theme/sidebar toggles
-- `sidebar.tsx` / `file-tree.tsx` - File explorer
-- `outline.tsx` - Document headings outline
-- `status-bar.tsx` - Bottom status bar
+**Editor Layout** (`src/components/editor/index.tsx`):
+- TitleBar → Sidebar + EditorArea + Outline → StatusBar
+- `editor-area.tsx` routes to `SplitEditor` or `WysiwygEditor` based on `editMode`
+- **WYSIWYG mode** (`wysiwyg-editor.tsx`): Custom block-based editor using `contenteditable` divs. Parses markdown into `Block` objects (paragraph, heading, code, quote, list, task, hr, table). Uses `parseMarkdownToBlocks()` / `blocksToMarkdown()` for conversion.
+- **Split mode** (`split-editor.tsx`): Plain textarea + live markdown preview side-by-side
 
-**Tauri Configuration:**
-- Window settings: 1200x800 default, 800x600 minimum, decorated (standard window frame)
+**File Operations** (`src/lib/file-operations.ts`):
+- `importFiles()` uses Tauri dialog plugin to select .md files, reads content via `invoke("read_file")`, adds to store
+- Save uses `sonner` toast for success (green) / error (red) feedback
+
+**Keyboard Shortcuts** (`src/components/editor/index.tsx`):
+- `Ctrl+S`: Save file (direct save for imported files, Save As for new files)
+- `Ctrl+Shift+Z`: Toggle left sidebar (file tree)
+- `Ctrl+Shift+X`: Toggle right outline panel
+
+## Tauri Configuration
+
+- App identifier: `radishtools.radishmd.fun`
+- Window: 1200x800 default, 800x600 minimum, decorated (standard frame)
 - Bundle targets: all (MSI, NSIS, etc.)
-- Frontend dist: `../dist` (Vite build output)
+- Permissions via `src-tauri/capabilities/default.json`: core:default, opener:default, dialog:default
 
 ## Key Files
 
-- `src-tauri/tauri.conf.json` - Tauri app configuration
-- `src-tauri/capabilities/default.json` - Tauri 2 permission capabilities
-- `src-tauri/Cargo.toml` - Rust dependencies
-- `vite.config.ts` - Vite configuration with Tailwind plugin
-- `src/index.css` - Tailwind CSS 4 with CSS variables (light/dark themes)
+| File | Purpose |
+|------|---------|
+| `src/lib/editor-store.ts` | Zustand store with all editor state |
+| `src/lib/file-operations.ts` | File import via Tauri dialog plugin |
+| `src/components/editor/` | Editor UI components |
+| `src-tauri/src/lib.rs` | Rust Tauri commands |
+| `src-tauri/tauri.conf.json` | App window and bundle config |
+| `vite.config.ts` | Vite + Tailwind CSS 4 setup |
+| `src/index.css` | Tailwind CSS 4 theme with light/dark CSS variables and WYSIWYG editor styles |
+| `src/styles/globals.css` | Additional global styles |

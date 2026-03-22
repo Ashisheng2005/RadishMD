@@ -1,4 +1,7 @@
 import { create } from "zustand"
+import { invoke } from "@tauri-apps/api/core"
+import { save } from "@tauri-apps/plugin-dialog"
+import { toast } from "sonner"
 
 export interface FileNode {
   id: string
@@ -7,6 +10,7 @@ export interface FileNode {
   children?: FileNode[]
   content?: string
   isExpanded?: boolean
+  filePath?: string
 }
 
 interface EditorState {
@@ -19,6 +23,7 @@ interface EditorState {
   editMode: "split" | "wysiwyg"
   wordCount: number
   charCount: number
+  creatingType: "file" | "folder" | null
   setActiveFile: (id: string) => void
   setContent: (content: string) => void
   toggleSidebar: () => void
@@ -27,139 +32,29 @@ interface EditorState {
   toggleEditMode: () => void
   toggleFolder: (id: string) => void
   updateCounts: (content: string) => void
+  addFiles: (files: FileNode[]) => void
+  findNodeById: (id: string) => FileNode | null
+  startCreating: (type: "file" | "folder") => void
+  confirmCreate: (name: string) => void
+  cancelCreate: () => void
+  moveNode: (nodeId: string, targetFolderId: string) => void
+  saveFile: () => Promise<void>
+  saveFileAs: () => Promise<void>
 }
 
-const initialFiles: FileNode[] = [
-  {
-    id: "1",
-    name: "Documents",
-    type: "folder",
-    isExpanded: true,
-    children: [
-      {
-        id: "1-1",
-        name: "RadishMD 项目文档.md",
-        type: "file",
-        content: `# RadishMD - Typora 风格 Markdown 编辑器
-
-## 项目概述
-
-RadishMD 是一款基于 **Tauri 2 + React + TypeScript + CodeMirror 6** 构建的现代化 Markdown 编辑器，致力于提供类似 Typora 的**所见即所得**编辑体验。
-
-### 核心特性
-
-- **实时预览** - 边写边看，无需切换模式
-- **语法高亮** - 支持多种编程语言
-- **主题切换** - 深色/浅色主题自由切换
-- **文件管理** - 侧边栏文件树，快速导航
-- **大纲视图** - 自动生成文档结构
-
-## 技术栈
-
-| 技术 | 用途 |
-|------|------|
-| Tauri 2 | 桌面应用框架 |
-| React | UI 框架 |
-| TypeScript | 类型安全 |
-| CodeMirror 6 | 编辑器核心 |
-| Zustand | 状态管理 |
-
-## 快速开始
-
-\`\`\`bash
-# 克隆项目
-git clone https://github.com/example/radishmd.git
-
-# 安装依赖
-pnpm install
-
-# 启动开发服务器
-pnpm tauri dev
-\`\`\`
-
-> **提示**: 请确保已安装 Rust 和 Node.js 环境。
-
-## 项目结构
-
-项目采用前后端分离架构：
-
-1. **前端 (src/)** - React + CodeMirror 编辑器
-2. **后端 (src-tauri/)** - Rust 文件系统操作
-
----
-
-*享受编写 Markdown 的乐趣！*`,
-      },
-      {
-        id: "1-2",
-        name: "开发计划.md",
-        type: "file",
-        content: `# 开发计划
-
-## 第一阶段：基础框架
-
-- [x] 项目初始化
-- [x] CodeMirror 集成
-- [ ] 基础 Markdown 渲染
-
-## 第二阶段：核心功能
-
-- [ ] 文件系统集成
-- [ ] 主题系统
-- [ ] 快捷键支持
-
-## 第三阶段：高级特性
-
-- [ ] 插件系统
-- [ ] 导出功能
-- [ ] 云同步`,
-      },
-    ],
-  },
-  {
-    id: "2",
-    name: "Notes",
-    type: "folder",
-    isExpanded: false,
-    children: [
-      {
-        id: "2-1",
-        name: "会议记录.md",
-        type: "file",
-        content: `# 会议记录
-
-## 2024-01-15
-
-### 议题
-- 项目进度汇报
-- 技术选型讨论
-
-### 决议
-1. 采用 Tauri 2 作为桌面框架
-2. 使用 CodeMirror 6 作为编辑器核心`,
-      },
-    ],
-  },
-  {
-    id: "3",
-    name: "README.md",
-    type: "file",
-    content: `# Welcome to RadishMD
-
-A modern Markdown editor built with love.`,
-  },
-]
+const initialFiles: FileNode[] = []
 
 export const useEditorStore = create<EditorState>((set, get) => ({
   files: initialFiles,
-  activeFileId: "1-1",
-  content: initialFiles[0].children?.[0].content || "",
+  activeFileId: null,
+  content: "",
   isSidebarOpen: true,
   isOutlineOpen: true,
   theme: "dark",
   editMode: "split",
   wordCount: 0,
   charCount: 0,
+  creatingType: null,
 
   setActiveFile: (id: string) => {
     const findFile = (nodes: FileNode[]): FileNode | null => {
@@ -213,5 +108,169 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       .split(/\s+/)
       .filter((w) => w.length > 0).length
     set({ wordCount, charCount })
+  },
+
+  addFiles: (files: FileNode[]) => {
+    const addFilesToRoot = (nodes: FileNode[], newFiles: FileNode[]): FileNode[] => {
+      return [...nodes, ...newFiles]
+    }
+    set((state) => ({ files: addFilesToRoot(state.files, files) }))
+  },
+
+  findNodeById: (id: string) => {
+    const findInNodes = (nodes: FileNode[]): FileNode | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node
+        if (node.children) {
+          const found = findInNodes(node.children)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    return findInNodes(get().files)
+  },
+
+  startCreating: (type: "file" | "folder") => {
+    set({ creatingType: type })
+  },
+
+  confirmCreate: (name: string) => {
+    const { creatingType } = get()
+    if (!creatingType || !name.trim()) {
+      set({ creatingType: null })
+      return
+    }
+
+    const newNode: FileNode = {
+      id: `${creatingType}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: name.trim(),
+      type: creatingType,
+      ...(creatingType === "folder" ? { isExpanded: false, children: [] } : { content: "" }),
+    }
+
+    set((state) => ({
+      files: [...state.files, newNode],
+      creatingType: null,
+      ...(creatingType === "file" && {
+        activeFileId: newNode.id,
+        content: "",
+      }),
+    }))
+
+    // Update word/char counts for new file
+    if (creatingType === "file") {
+      get().updateCounts("")
+    }
+  },
+
+  cancelCreate: () => {
+    set({ creatingType: null })
+  },
+
+  moveNode: (nodeId: string, targetFolderId: string) => {
+    const state = get()
+    let nodeToMove: FileNode | null = null
+
+    // Find and remove the node from its current location
+    const removeNode = (nodes: FileNode[]): FileNode[] => {
+      return nodes.filter((node) => {
+        if (node.id === nodeId) {
+          nodeToMove = node
+          return false
+        }
+        if (node.children) {
+          node.children = removeNode(node.children)
+        }
+        return true
+      })
+    }
+
+    // Add the node to the target folder
+    const addNodeToFolder = (nodes: FileNode[]): FileNode[] => {
+      return nodes.map((node) => {
+        if (node.id === targetFolderId && node.type === "folder") {
+          return {
+            ...node,
+            children: [...(node.children || []), { ...nodeToMove!, children: undefined }],
+            isExpanded: true,
+          }
+        }
+        if (node.children) {
+          node.children = addNodeToFolder(node.children)
+        }
+        return node
+      })
+    }
+
+    const filesWithoutNode = removeNode(state.files)
+    if (nodeToMove) {
+      set({ files: addNodeToFolder(filesWithoutNode) })
+    }
+  },
+
+  saveFile: async () => {
+    const { activeFileId, content } = get()
+    if (!activeFileId) return
+
+    const file = get().findNodeById(activeFileId)
+    if (!file || file.type !== "file" || !file.filePath) {
+      // No file path, do Save As
+      await get().saveFileAs()
+      return
+    }
+
+    // Direct save
+    try {
+      await invoke("write_file", { path: file.filePath, content })
+      toast.success(`已保存: ${file.name}`, {
+        style: { backgroundColor: "#22c55e", color: "#fff" },
+      })
+    } catch (e) {
+      toast.error(`保存失败: ${file.name}`, {
+        style: { backgroundColor: "#ef4444", color: "#fff" },
+      })
+    }
+  },
+
+  saveFileAs: async () => {
+    const { activeFileId, content } = get()
+    if (!activeFileId) return
+
+    const file = get().findNodeById(activeFileId)
+    if (!file || file.type !== "file") return
+
+    const selected = await save({
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+      defaultPath: file.name,
+    })
+
+    if (!selected) return
+
+    try {
+      await invoke("write_file", { path: selected, content })
+
+      // Update file path and name in store
+      const newName = selected.split(/[\\/]/).pop() || file.name
+      const updateFilePath = (nodes: FileNode[]): FileNode[] => {
+        return nodes.map((node) => {
+          if (node.id === activeFileId) {
+            return { ...node, filePath: selected, name: newName }
+          }
+          if (node.children) {
+            return { ...node, children: updateFilePath(node.children) }
+          }
+          return node
+        })
+      }
+      set((state) => ({ files: updateFilePath(state.files) }))
+      toast.success(`已保存: ${newName}`, {
+        style: { backgroundColor: "#22c55e", color: "#fff" },
+      })
+    } catch (e) {
+      toast.error(`保存失败: ${selected}`, {
+        style: { backgroundColor: "#ef4444", color: "#fff" },
+      })
+    }
   },
 }))

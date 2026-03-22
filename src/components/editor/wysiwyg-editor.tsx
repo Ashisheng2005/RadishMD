@@ -392,32 +392,37 @@ export function WysiwygEditor() {
   const { content, setContent } = useEditorStore()
   const [blocks, setBlocks] = useState<Block[]>(() => parseMarkdownToBlocks(content))
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
+  const isInternalUpdate = useRef(false)
 
   // Sync blocks with content when content changes externally
   useEffect(() => {
-    setBlocks(parseMarkdownToBlocks(content))
+    if (!isInternalUpdate.current) {
+      setBlocks(parseMarkdownToBlocks(content))
+    }
   }, [content])
 
+  // Sync blocks to content when blocks change internally
+  useEffect(() => {
+    if (isInternalUpdate.current) {
+      setContent(blocksToMarkdown(blocks))
+      // Reset after syncing
+      isInternalUpdate.current = false
+    }
+  }, [blocks, setContent])
+
   const updateBlock = useCallback((blockId: string, newContent: string) => {
-    setBlocks((prev) => {
-      const updated = prev.map((b) =>
-        b.id === blockId ? { ...b, content: newContent } : b
-      )
-      // Update the store with markdown
-      setContent(blocksToMarkdown(updated))
-      return updated
-    })
-  }, [setContent])
+    isInternalUpdate.current = true
+    setBlocks((prev) => prev.map((b) =>
+      b.id === blockId ? { ...b, content: newContent } : b
+    ))
+  }, [])
 
   const toggleTask = useCallback((blockId: string) => {
-    setBlocks((prev) => {
-      const updated = prev.map((b) =>
-        b.id === blockId && b.type === "task" ? { ...b, checked: !b.checked } : b
-      )
-      setContent(blocksToMarkdown(updated))
-      return updated
-    })
-  }, [setContent])
+    isInternalUpdate.current = true
+    setBlocks((prev) => prev.map((b) =>
+      b.id === blockId && b.type === "task" ? { ...b, checked: !b.checked } : b
+    ))
+  }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, block: Block) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -428,11 +433,10 @@ export function WysiwygEditor() {
         content: "",
         checked: false,
       }
+      isInternalUpdate.current = true
       setBlocks((prev) => {
         const idx = prev.findIndex((b) => b.id === block.id)
-        const updated = [...prev.slice(0, idx + 1), newBlock, ...prev.slice(idx + 1)]
-        setContent(blocksToMarkdown(updated))
-        return updated
+        return [...prev.slice(0, idx + 1), newBlock, ...prev.slice(idx + 1)]
       })
       setActiveBlockId(newBlock.id)
       // Focus the new block
@@ -449,12 +453,10 @@ export function WysiwygEditor() {
         if (idx > 0) {
           setActiveBlockId(prev[idx - 1].id)
         }
-        const updated = prev.filter((b) => b.id !== block.id)
-        setContent(blocksToMarkdown(updated))
-        return updated
+        return prev.filter((b) => b.id !== block.id)
       })
     }
-  }, [blocks.length, setContent])
+  }, [blocks.length])
 
   return (
     <div className="flex-1 overflow-y-auto">
