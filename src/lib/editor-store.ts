@@ -40,6 +40,7 @@ interface EditorState {
   moveNode: (nodeId: string, targetFolderId: string) => void
   saveFile: () => Promise<void>
   saveFileAs: () => Promise<void>
+  openFileFromPath: (filePath: string) => Promise<void>
 }
 
 const initialFiles: FileNode[] = []
@@ -269,6 +270,33 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })
     } catch (e) {
       toast.error(`保存失败: ${selected}`, {
+        style: { backgroundColor: "#ef4444", color: "#fff" },
+      })
+    }
+  },
+
+  openFileFromPath: async (filePath: string) => {
+    try {
+      const content = await invoke<string>("read_file", { path: filePath })
+      const fileName = await invoke<string>("get_file_name", { filePath })
+
+      const newFile: FileNode = {
+        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        name: fileName,
+        type: "file",
+        content,
+        filePath,
+      }
+
+      set((state) => ({ files: [...state.files, newFile] }))
+      set({ activeFileId: newFile.id, content })
+      get().updateCounts(content)
+
+      toast.success(`已打开: ${fileName}`, {
+        style: { backgroundColor: "#22c55e", color: "#fff" },
+      })
+    } catch (e) {
+      toast.error(`打开失败: ${filePath}`, {
         style: { backgroundColor: "#ef4444", color: "#fff" },
       })
     }

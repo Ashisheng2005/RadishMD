@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { invoke } from "@tauri-apps/api/core"
 import { useEditorStore } from "@/lib/editor-store"
 import { TitleBar } from "./title-bar"
 import { Sidebar } from "./sidebar"
@@ -8,7 +9,7 @@ import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
 
 export function Editor() {
-  const { theme, toggleSidebar, toggleOutline, saveFile } = useEditorStore()
+  const { theme, toggleSidebar, toggleOutline, saveFile, openFileFromPath } = useEditorStore()
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -44,6 +45,15 @@ export function Editor() {
       document.documentElement.classList.remove("dark")
     }
   }, [theme])
+
+  useEffect(() => {
+    // Check for file opened via file association on app startup
+    invoke<string | null>("get_cli_file_path").then((filePath) => {
+      if (filePath) {
+        openFileFromPath(filePath)
+      }
+    })
+  }, [openFileFromPath])
 
   return (
     <div

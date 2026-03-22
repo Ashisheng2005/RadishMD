@@ -30,15 +30,18 @@ npm run tauri build    # Build production Tauri app (outputs .exe)
 - CodeMirror 6 packages in dependencies (unused - WYSIWYG uses custom `contenteditable` blocks)
 
 **Backend (Rust):**
-- Tauri 2 framework with plugins: `tauri-plugin-opener` (external links), `tauri-plugin-dialog` (file dialogs)
+- Tauri 2 framework with plugins: `tauri-plugin-opener` (external links), `tauri-plugin-dialog` (file dialogs), `tauri-plugin-cli` (file associations)
 - Entry point: `src-tauri/src/main.rs` → `lib.rs:run()`
-- Commands in `src-tauri/src/lib.rs`: `read_file`, `write_file`, `get_file_name`
+- Commands in `src-tauri/src/lib.rs`: `read_file`, `write_file`, `get_file_name`, `get_cli_file_path`
+- `get_cli_file_path` retrieves the file path passed via CLI when opening a `.md` file association
+- CLI plugin handles Windows file association (`.md` files) - emits `open-file` event to frontend
 
 **State Management** (`src/lib/editor-store.ts`):
 - File tree (`files: FileNode[]`) with `filePath` for imported files
 - Active file tracking and editor content
 - `saveFile()`: direct save for imported files, Save As for new files
 - `saveFileAs()`: always opens Save As dialog
+- `openFileFromPath()`: opens a file from disk path (used by file associations)
 - UI toggles: `isSidebarOpen`, `isOutlineOpen`, `theme`, `editMode`
 - Inline creation workflow: `creatingType` ("file" | "folder" | null) triggers `InlineCreateInput` in `file-tree.tsx`
 - `editMode`: "split" | "wysiwyg" - toggles between split-pane and WYSIWYG editing
@@ -49,21 +52,39 @@ npm run tauri build    # Build production Tauri app (outputs .exe)
 - **WYSIWYG mode** (`wysiwyg-editor.tsx`): Custom block-based editor using `contenteditable` divs. Parses markdown into `Block` objects (paragraph, heading, code, quote, list, task, hr, table). Uses `parseMarkdownToBlocks()` / `blocksToMarkdown()` for conversion.
 - **Split mode** (`split-editor.tsx`): Plain textarea + live markdown preview side-by-side
 
-**File Operations** (`src/lib/file-operations.ts`):
-- `importFiles()` uses Tauri dialog plugin to select .md files, reads content via `invoke("read_file")`, adds to store
-- Save uses `sonner` toast for success (green) / error (red) feedback
+**Toolbar Component** (`src/components/editor/toolbar.tsx`):
+- Exports `FormatType` for all formatting button types
+- `onFormat?: (type: FormatType) => void` callback for button clicks
+- Used by both SplitEditor and WysiwygEditor
 
-**Keyboard Shortcuts** (`src/components/editor/index.tsx`):
+**Formatting Keyboard Shortcuts** (both Split and WYSIWYG modes):
+- `Ctrl+B`: Bold `**text**`
+- `Ctrl+I`: Italic `*text*`
+- `Ctrl+K`: Link `[text](url)`
+- `Ctrl+1-6`: Heading 1-6 `#` to `######`
+- `Ctrl+Shift+S`: Strikethrough `~~text~~`
+- `Ctrl+Shift+\``: Inline code `` `code` ``
+- `Ctrl+Shift+I`: Image `![alt](url)`
+- `Ctrl+Shift+8`: Unordered list `- text`
+- `Ctrl+Shift+7`: Ordered list `1. text`
+- `Ctrl+Shift+Q`: Blockquote `> text`
+
+**Global Keyboard Shortcuts** (`src/components/editor/index.tsx`):
 - `Ctrl+S`: Save file (direct save for imported files, Save As for new files)
 - `Ctrl+Shift+Z`: Toggle left sidebar (file tree)
 - `Ctrl+Shift+X`: Toggle right outline panel
+
+**File Operations** (`src/lib/file-operations.ts`):
+- `importFiles()` uses Tauri dialog plugin to select .md files, reads content via `invoke("read_file")`, adds to store
+- Save uses `sonner` toast for success (green) / error (red) feedback
 
 ## Tauri Configuration
 
 - App identifier: `radishtools.radishmd.fun`
 - Window: 1200x800 default, 800x600 minimum, decorated (standard frame)
 - Bundle targets: all (MSI, NSIS, etc.)
-- Permissions via `src-tauri/capabilities/default.json`: core:default, opener:default, dialog:default
+- File associations: `.md` files registered to open with RadishMD
+- Permissions via `src-tauri/capabilities/default.json`: core:default, opener:default, dialog:default, cli:default
 
 ## Key Files
 
@@ -71,9 +92,10 @@ npm run tauri build    # Build production Tauri app (outputs .exe)
 |------|---------|
 | `src/lib/editor-store.ts` | Zustand store with all editor state |
 | `src/lib/file-operations.ts` | File import via Tauri dialog plugin |
-| `src/components/editor/` | Editor UI components |
+| `src/components/editor/toolbar.tsx` | Toolbar with `FormatType` export and formatting buttons |
+| `src/components/editor/wysiwyg-editor.tsx` | WYSIWYG editor with block-based contenteditable |
+| `src/components/editor/split-editor.tsx` | Split pane editor with textarea + preview |
 | `src-tauri/src/lib.rs` | Rust Tauri commands |
 | `src-tauri/tauri.conf.json` | App window and bundle config |
 | `vite.config.ts` | Vite + Tailwind CSS 4 setup |
 | `src/index.css` | Tailwind CSS 4 theme with light/dark CSS variables and WYSIWYG editor styles |
-| `src/styles/globals.css` | Additional global styles |
