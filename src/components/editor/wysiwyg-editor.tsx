@@ -116,14 +116,29 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
       continue
     }
 
-    // Empty line or paragraph
+    // Empty line or paragraph - merge consecutive non-empty lines into one paragraph
     if (line.trim() === "") {
       i++
       continue
     }
 
-    blocks.push({ id, type: "paragraph", content: line })
+    // Collect consecutive non-empty lines for this paragraph
+    const paragraphLines: string[] = [line]
     i++
+    while (i < lines.length) {
+      const nextLine = lines[i]
+      // Stop if empty line or a special block type starts a new line
+      if (nextLine.trim() === "") break
+      if (nextLine.startsWith("```")) break
+      if (nextLine.match(/^---+$/)) break
+      if (nextLine.match(/^#{1,6}\s/)) break
+      if (nextLine.match(/^-\s/)) break
+      if (nextLine.match(/^>\s/)) break
+      paragraphLines.push(nextLine)
+      i++
+    }
+
+    blocks.push({ id, type: "paragraph", content: paragraphLines.join("\n") })
   }
 
   if (blocks.length === 0) {
@@ -171,6 +186,9 @@ function renderInlineMarkdown(text: string): string {
 
   // Escape HTML
   result = result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+
+  // Convert newlines to <br> for multi-line support
+  result = result.replace(/\n/g, "<br>")
 
   // Bold + Italic
   result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
@@ -231,7 +249,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
   }, [onClick, block.type])
 
   const blockStyles: Record<Block["type"], string> = {
-    paragraph: "text-base leading-relaxed",
+    paragraph: "text-base leading-relaxed whitespace-pre-wrap",
     heading1: "text-3xl font-bold mt-8 mb-4",
     heading2: "text-2xl font-semibold mt-6 mb-3 pb-2 border-b border-border",
     heading3: "text-xl font-semibold mt-5 mb-2",
@@ -240,8 +258,8 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
     heading6: "text-sm font-semibold mt-3 mb-1 text-muted-foreground",
     code: "font-mono text-sm bg-muted p-4 rounded-lg overflow-x-auto whitespace-pre",
     quote: "border-l-4 border-primary pl-4 py-1 italic text-muted-foreground bg-muted/30 rounded-r",
-    list: "text-base leading-relaxed",
-    task: "text-base leading-relaxed",
+    list: "text-base leading-relaxed whitespace-pre-wrap",
+    task: "text-base leading-relaxed whitespace-pre-wrap",
     hr: "",
     table: "text-base",
   }
@@ -301,7 +319,9 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
             block.checked && "line-through text-muted-foreground"
           )}
           dangerouslySetInnerHTML={{
-            __html: isEditing ? block.content : renderInlineMarkdown(block.content),
+            __html: isEditing
+              ? block.content.replace(/\n/g, "<br>")
+              : renderInlineMarkdown(block.content),
           }}
         />
       </div>
@@ -327,7 +347,9 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           onKeyDown={(e) => onKeyDown(e, block)}
           className={cn("flex-1 outline-none", blockStyles[block.type])}
           dangerouslySetInnerHTML={{
-            __html: isEditing ? block.content : renderInlineMarkdown(block.content),
+            __html: isEditing
+              ? block.content.replace(/\n/g, "<br>")
+              : renderInlineMarkdown(block.content),
           }}
         />
       </div>
@@ -383,7 +405,9 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
       )}
       data-placeholder={!block.content ? "输入内容..." : undefined}
       dangerouslySetInnerHTML={{
-        __html: isEditing ? block.content : renderInlineMarkdown(block.content) || "&nbsp;",
+        __html: isEditing
+          ? block.content.replace(/\n/g, "<br>")
+          : renderInlineMarkdown(block.content) || "&nbsp;",
       }}
     />
   )
@@ -811,13 +835,46 @@ export function WysiwygEditor() {
   }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, block: Block) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter") {
+      // For paragraph/list/task blocks: insert <br> for newlines (allow multi-line)
+      // For other blocks (heading, code, quote, hr): create new block
+      const blockTypesWithMultiLine = ["paragraph", "list", "task"]
+
+      if (blockTypesWithMultiLine.includes(block.type) || e.shiftKey) {
+        // Insert <br> at cursor position (multi-line support)
+        e.preventDefault()
+        const selection = window.getSelection()
+        if (!selection || selection.rangeCount === 0) return
+
+        const range = selection.getRangeAt(0)
+        range.deleteContents()
+
+        const br = document.createElement("br")
+        range.insertNode(br)
+
+        // Move cursor after <br>
+        range.setStartAfter(br)
+        range.setEndAfter(br)
+        selection.removeAllRanges()
+        selection.addRange(range)
+
+        // Force content update
+        const blockIndex = blocks.findIndex((b) => b.id === block.id)
+        if (blockIndex !== -1) {
+          isInternalUpdate.current = true
+          // The content is already updated via DOM manipulation
+          // We need to sync the block content with the actual DOM
+          setBlocks((prev) => [...prev])
+        }
+        return
+      }
+
+      // For headings, code, quote, hr: create new block below
       e.preventDefault()
       const result = getActiveBlockContent()
       if (!result) return
       const { element } = result
 
-      // Get caret position and split content
       const caretPos = getCaretPosition(element)
       const fullText = element.innerText
       const textBefore = fullText.slice(0, caretPos)
@@ -825,7 +882,7 @@ export function WysiwygEditor() {
 
       const newBlock: Block = {
         id: `block-${Date.now()}`,
-        type: block.type === "list" ? "list" : block.type === "task" ? "task" : "paragraph",
+        type: "paragraph",
         content: textAfter,
         checked: false,
       }
@@ -844,7 +901,6 @@ export function WysiwygEditor() {
       })
       setActiveBlockId(newBlock.id)
 
-      // Focus the new block's contenteditable element and set cursor at start
       setTimeout(() => {
         const el = document.querySelector(`[data-block-id="${newBlock.id}"] [contenteditable]`) as HTMLElement
         if (el) {
@@ -852,6 +908,7 @@ export function WysiwygEditor() {
           setCaretPosition(el, 0)
         }
       }, 10)
+      return
     }
 
     if (e.key === "Backspace" && block.content === "" && blocks.length > 1) {
@@ -864,7 +921,7 @@ export function WysiwygEditor() {
         return prev.filter((b) => b.id !== block.id)
       })
     }
-  }, [blocks.length, getActiveBlockContent])
+  }, [blocks, getActiveBlockContent])
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
