@@ -7,6 +7,60 @@ import { cn } from "@/lib/utils"
 export function SplitEditor() {
   const { content, setContent } = useEditorStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const isSyncingScrollRef = useRef(false)
+  const ignoreEditorScrollUntilRef = useRef(0)
+  const ignorePreviewScrollUntilRef = useRef(0)
+
+  const suppressScroll = useCallback((target: "editor" | "preview", duration = 180) => {
+    const expiresAt = performance.now() + duration
+
+    if (target === "editor") {
+      ignoreEditorScrollUntilRef.current = expiresAt
+      return
+    }
+
+    ignorePreviewScrollUntilRef.current = expiresAt
+  }, [])
+
+  const syncScrollPosition = useCallback(
+    (source: HTMLElement, target: HTMLElement, targetType: "editor" | "preview") => {
+      if (isSyncingScrollRef.current) return
+
+      const sourceMaxScrollTop = source.scrollHeight - source.clientHeight
+      const targetMaxScrollTop = target.scrollHeight - target.clientHeight
+      const ratio = sourceMaxScrollTop > 0 ? source.scrollTop / sourceMaxScrollTop : 0
+
+      isSyncingScrollRef.current = true
+      suppressScroll(targetType)
+      target.scrollTop = targetMaxScrollTop > 0 ? ratio * targetMaxScrollTop : 0
+
+      requestAnimationFrame(() => {
+        isSyncingScrollRef.current = false
+      })
+    },
+    [suppressScroll]
+  )
+
+  const handleEditorScroll = useCallback(() => {
+    if (performance.now() < ignoreEditorScrollUntilRef.current) return
+
+    const textarea = textareaRef.current
+    const preview = previewRef.current
+    if (!textarea || !preview) return
+
+    syncScrollPosition(textarea, preview, "preview")
+  }, [syncScrollPosition])
+
+  const handlePreviewScroll = useCallback(() => {
+    if (performance.now() < ignorePreviewScrollUntilRef.current) return
+
+    const textarea = textareaRef.current
+    const preview = previewRef.current
+    if (!textarea || !preview) return
+
+    syncScrollPosition(preview, textarea, "editor")
+  }, [syncScrollPosition])
 
   useEffect(() => {
     // Initialize word count
@@ -293,8 +347,10 @@ export function SplitEditor() {
           </div>
           <textarea
             ref={textareaRef}
+            data-editor-textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
+            onScroll={handleEditorScroll}
             className={cn(
               "flex-1 w-full resize-none p-6 bg-background text-foreground",
               "font-mono text-sm leading-relaxed",
@@ -311,7 +367,7 @@ export function SplitEditor() {
           <div className="px-3 py-1.5 border-b border-border bg-muted/30">
             <span className="text-xs font-medium text-muted-foreground">预览</span>
           </div>
-          <div className="flex-1 overflow-y-auto p-6 bg-background">
+          <div ref={previewRef} onScroll={handlePreviewScroll} className="flex-1 overflow-y-auto p-6 bg-background">
             <MarkdownRenderer content={content} />
           </div>
         </div>

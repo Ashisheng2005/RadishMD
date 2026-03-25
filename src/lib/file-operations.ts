@@ -21,5 +21,10 @@ export async function importFiles(): Promise<void> {
       filePath,
     })
   }
-  useEditorStore.getState().addFiles(newFiles)
+
+  const store = useEditorStore.getState()
+  store.addFiles(newFiles)
+  if (newFiles.length > 0) {
+    store.setActiveFile(newFiles[0].id)
+  }
 }

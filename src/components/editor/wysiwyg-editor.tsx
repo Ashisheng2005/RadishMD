@@ -7,6 +7,7 @@ import { FormatType, Toolbar } from "./toolbar"
 
 interface Block {
   id: string
+  sourceLine: number
   type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "task" | "hr" | "table"
   content: string
   checked?: boolean
@@ -25,6 +26,7 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
 
     // Code block
     if (line.startsWith("```")) {
+      const sourceLine = i
       const language = line.slice(3).trim()
       const codeLines: string[] = []
       i++
@@ -34,6 +36,7 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
       }
       blocks.push({
         id,
+        sourceLine,
         type: "code",
         content: codeLines.join("\n"),
         language,
@@ -44,7 +47,7 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
 
     // Horizontal rule
     if (line.match(/^---+$/)) {
-      blocks.push({ id, type: "hr", content: "" })
+      blocks.push({ id, sourceLine: i, type: "hr", content: "" })
       i++
       continue
     }
@@ -52,37 +55,37 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
     // Headings
     const h6Match = line.match(/^######\s+(.*)$/)
     if (h6Match) {
-      blocks.push({ id, type: "heading6", content: h6Match[1] })
+      blocks.push({ id, sourceLine: i, type: "heading6", content: h6Match[1] })
       i++
       continue
     }
     const h5Match = line.match(/^#####\s+(.*)$/)
     if (h5Match) {
-      blocks.push({ id, type: "heading5", content: h5Match[1] })
+      blocks.push({ id, sourceLine: i, type: "heading5", content: h5Match[1] })
       i++
       continue
     }
     const h4Match = line.match(/^####\s+(.*)$/)
     if (h4Match) {
-      blocks.push({ id, type: "heading4", content: h4Match[1] })
+      blocks.push({ id, sourceLine: i, type: "heading4", content: h4Match[1] })
       i++
       continue
     }
     const h3Match = line.match(/^###\s+(.*)$/)
     if (h3Match) {
-      blocks.push({ id, type: "heading3", content: h3Match[1] })
+      blocks.push({ id, sourceLine: i, type: "heading3", content: h3Match[1] })
       i++
       continue
     }
     const h2Match = line.match(/^##\s+(.*)$/)
     if (h2Match) {
-      blocks.push({ id, type: "heading2", content: h2Match[1] })
+      blocks.push({ id, sourceLine: i, type: "heading2", content: h2Match[1] })
       i++
       continue
     }
     const h1Match = line.match(/^#\s+(.*)$/)
     if (h1Match) {
-      blocks.push({ id, type: "heading1", content: h1Match[1] })
+      blocks.push({ id, sourceLine: i, type: "heading1", content: h1Match[1] })
       i++
       continue
     }
@@ -92,6 +95,7 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
     if (taskMatch) {
       blocks.push({
         id,
+        sourceLine: i,
         type: "task",
         content: taskMatch[2],
         checked: taskMatch[1] === "x",
@@ -103,7 +107,7 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
     // Unordered list
     const listMatch = line.match(/^-\s+(.*)$/)
     if (listMatch) {
-      blocks.push({ id, type: "list", content: listMatch[1] })
+      blocks.push({ id, sourceLine: i, type: "list", content: listMatch[1] })
       i++
       continue
     }
@@ -111,7 +115,7 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
     // Blockquote
     const quoteMatch = line.match(/^>\s*(.*)$/)
     if (quoteMatch) {
-      blocks.push({ id, type: "quote", content: quoteMatch[1] })
+      blocks.push({ id, sourceLine: i, type: "quote", content: quoteMatch[1] })
       i++
       continue
     }
@@ -138,11 +142,11 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
       i++
     }
 
-    blocks.push({ id, type: "paragraph", content: paragraphLines.join("\n") })
+    blocks.push({ id, sourceLine: i - paragraphLines.length, type: "paragraph", content: paragraphLines.join("\n") })
   }
 
   if (blocks.length === 0) {
-    blocks.push({ id: "block-0", type: "paragraph", content: "" })
+    blocks.push({ id: "block-0", sourceLine: 0, type: "paragraph", content: "" })
   }
 
   return blocks
@@ -882,6 +886,7 @@ export function WysiwygEditor() {
 
       const newBlock: Block = {
         id: `block-${Date.now()}`,
+        sourceLine: block.sourceLine + textBefore.split("\n").length,
         type: "paragraph",
         content: textAfter,
         checked: false,
@@ -926,10 +931,15 @@ export function WysiwygEditor() {
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       <Toolbar onFormat={handleFormatShortcut} />
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" data-editor-scroll-container>
         <div className="max-w-3xl mx-auto px-8 py-12">
           {blocks.map((block) => (
-            <div key={block.id} data-block-id={block.id}>
+            <div
+              key={block.id}
+              data-block-id={block.id}
+              data-block-type={block.type}
+              data-source-line={block.sourceLine}
+            >
               <BlockEditor
                 block={block}
                 onUpdate={(content) => updateBlock(block.id, content)}
