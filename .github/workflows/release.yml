@@ -1,0 +1,73 @@
+name: release
+
+on:
+  # 只有打上 v1.2.3 这种 tag 时才正式发布
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-tauri:
+    name: publish (${{ matrix.platform }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      # 一个平台失败不影响另外两个平台继续跑
+      fail-fast: false
+      matrix:
+        include:
+          # Linux 会产出 deb / rpm
+          - platform: ubuntu-22.04
+            args: ""
+          # Windows 会产出 exe / installer
+          - platform: windows-latest
+            args: ""
+          # macOS 会产出 dmg / app 等包
+          - platform: macos-latest
+            args: ""
+
+    steps:
+      # 取出仓库代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 安装 Node.js，并开启 npm 缓存
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # 安装前端依赖
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # Linux runner 需要额外系统库，Tauri 在打包桌面程序时会用到
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # 安装 Rust toolchain
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
+      - name: Build and release Tauri app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: RadishMD v__VERSION__
+          releaseBody: "RadishMD automated release build."
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
