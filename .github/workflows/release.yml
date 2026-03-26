@@ -61,7 +61,7 @@ jobs:
 
       # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
       - name: Build and release Tauri app
-        uses: tauri-apps/tauri-action@v1
+        uses: tauri-apps/tauri-action@v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
