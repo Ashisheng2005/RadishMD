@@ -1,6 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog"
-import { invoke } from "@tauri-apps/api/core"
-import { FileNode, useEditorStore } from "./editor-store"
+import { readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
 
 export async function importFiles(): Promise<void> {
   const selected = await open({
@@ -11,20 +10,21 @@ export async function importFiles(): Promise<void> {
 
   const newFiles: FileNode[] = []
   for (const filePath of selected as string[]) {
-    const content = await invoke<string>("read_file", { path: filePath })
-    const name = await invoke<string>("get_file_name", { filePath })
+    const { content, modified } = await readFileSnapshot(filePath)
+    const name = filePath.split(/[\\/]/).pop() || filePath
     newFiles.push({
       id: `import-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name,
       type: "file",
       content,
       filePath,
+      sourceModified: modified,
     })
   }
 
   const store = useEditorStore.getState()
   store.addFiles(newFiles)
   if (newFiles.length > 0) {
-    store.setActiveFile(newFiles[0].id)
+    void store.setActiveFile(newFiles[0].id)
   }
 }

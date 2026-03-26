@@ -11,6 +11,12 @@ export interface FileNode {
   content?: string
   isExpanded?: boolean
   filePath?: string
+  sourceModified?: number | null
+}
+
+interface FileSnapshot {
+  content: string
+  modified: number | null
 }
 
 interface EditorState {
@@ -19,13 +25,17 @@ interface EditorState {
   content: string
   isSidebarOpen: boolean
   isOutlineOpen: boolean
+  isSearchOpen: boolean
   theme: "light" | "dark"
   editMode: "split" | "wysiwyg"
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
-  setActiveFile: (id: string) => void
+  setActiveFile: (id: string) => Promise<void>
   setContent: (content: string) => void
+  openSearch: () => void
+  closeSearch: () => void
+  toggleSearch: () => void
   toggleSidebar: () => void
   toggleOutline: () => void
   toggleTheme: () => void
@@ -34,6 +44,8 @@ interface EditorState {
   updateCounts: (content: string) => void
   addFiles: (files: FileNode[]) => void
   findNodeById: (id: string) => FileNode | null
+  findNodeByPath: (filePath: string) => FileNode | null
+  updateFileContent: (id: string, content: string, sourceModified?: number | null) => void
   startCreating: (type: "file" | "folder") => void
   confirmCreate: (name: string) => void
   cancelCreate: () => void
@@ -45,19 +57,43 @@ interface EditorState {
 
 const initialFiles: FileNode[] = []
 
+export async function readFileSnapshot(filePath: string): Promise<FileSnapshot> {
+  const snapshot = await invoke<FileSnapshot>("read_file_snapshot", { path: filePath })
+  return snapshot
+}
+
+function updateFileInNodes(
+  nodes: FileNode[],
+  id: string,
+  updater: (node: FileNode) => FileNode,
+): FileNode[] {
+  return nodes.map((node) => {
+    if (node.id === id) {
+      return updater(node)
+    }
+
+    if (node.children) {
+      return { ...node, children: updateFileInNodes(node.children, id, updater) }
+    }
+
+    return node
+  })
+}
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   files: initialFiles,
   activeFileId: null,
   content: "",
   isSidebarOpen: true,
   isOutlineOpen: true,
+  isSearchOpen: false,
   theme: "dark",
   editMode: "split",
   wordCount: 0,
   charCount: 0,
   creatingType: null,
 
-  setActiveFile: (id: string) => {
+  setActiveFile: async (id: string) => {
     const findFile = (nodes: FileNode[]): FileNode | null => {
       for (const node of nodes) {
         if (node.id === id && node.type === "file") return node
@@ -68,17 +104,51 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
       return null
     }
+
     const file = findFile(get().files)
     if (file) {
-      set({ activeFileId: id, content: file.content || "" })
-      get().updateCounts(file.content || "")
+      set({ activeFileId: id })
+
+      if (file.filePath) {
+        try {
+          const snapshot = await readFileSnapshot(file.filePath)
+          if (get().activeFileId !== id) {
+            return
+          }
+
+          const modifiedChanged = snapshot.modified !== file.sourceModified
+
+          if (modifiedChanged) {
+            get().updateFileContent(id, snapshot.content, snapshot.modified)
+            set({ content: snapshot.content })
+            get().updateCounts(snapshot.content)
+            return
+          }
+        } catch {
+          // Fall back to the in-memory version if the file cannot be read.
+        }
+      }
+
+      const currentContent = file.content || ""
+      set({ content: currentContent })
+      get().updateCounts(currentContent)
     }
   },
 
   setContent: (content: string) => {
+    const { activeFileId } = get()
+
+    if (activeFileId) {
+      get().updateFileContent(activeFileId, content)
+    }
+
     set({ content })
     get().updateCounts(content)
   },
+
+  openSearch: () => set({ isSearchOpen: true }),
+  closeSearch: () => set({ isSearchOpen: false }),
+  toggleSearch: () => set((state) => ({ isSearchOpen: !state.isSearchOpen })),
 
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   toggleOutline: () => set((state) => ({ isOutlineOpen: !state.isOutlineOpen })),
@@ -93,12 +163,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (node.id === id && node.type === "folder") {
           return { ...node, isExpanded: !node.isExpanded }
         }
+
         if (node.children) {
           return { ...node, children: toggleInNodes(node.children) }
         }
+
         return node
       })
     }
+
     set((state) => ({ files: toggleInNodes(state.files) }))
   },
 
@@ -130,6 +203,30 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return null
     }
     return findInNodes(get().files)
+  },
+
+  findNodeByPath: (filePath: string) => {
+    const findInNodes = (nodes: FileNode[]): FileNode | null => {
+      for (const node of nodes) {
+        if (node.type === "file" && node.filePath === filePath) return node
+        if (node.children) {
+          const found = findInNodes(node.children)
+          if (found) return found
+        }
+      }
+      return null
+    }
+    return findInNodes(get().files)
+  },
+
+  updateFileContent: (id: string, content: string, sourceModified?: number | null) => {
+    set((state) => ({
+      files: updateFileInNodes(state.files, id, (node) => ({
+        ...node,
+        content,
+        ...(sourceModified !== undefined ? { sourceModified } : {}),
+      })),
+    }))
   },
 
   startCreating: (type: "file" | "folder") => {
@@ -250,21 +347,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     try {
       await invoke("write_file", { path: selected, content })
+      const snapshot = await readFileSnapshot(selected)
 
       // Update file path and name in store
       const newName = selected.split(/[\\/]/).pop() || file.name
-      const updateFilePath = (nodes: FileNode[]): FileNode[] => {
-        return nodes.map((node) => {
-          if (node.id === activeFileId) {
-            return { ...node, filePath: selected, name: newName }
-          }
-          if (node.children) {
-            return { ...node, children: updateFilePath(node.children) }
-          }
-          return node
-        })
-      }
-      set((state) => ({ files: updateFilePath(state.files) }))
+      set((state) => ({
+        files: updateFileInNodes(state.files, activeFileId, (node) => ({
+          ...node,
+          filePath: selected,
+          name: newName,
+          content,
+          sourceModified: snapshot.modified,
+        })),
+      }))
       toast.success(`已保存: ${newName}`, {
         style: { backgroundColor: "#22c55e", color: "#fff" },
       })
@@ -277,20 +372,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   openFileFromPath: async (filePath: string) => {
     try {
-      const content = await invoke<string>("read_file", { path: filePath })
+      const snapshot = await readFileSnapshot(filePath)
       const fileName = await invoke<string>("get_file_name", { filePath })
+      const existingFile = get().findNodeByPath(filePath)
+
+      if (existingFile) {
+        get().updateFileContent(existingFile.id, snapshot.content, snapshot.modified)
+        await get().setActiveFile(existingFile.id)
+        toast.success(`已打开: ${fileName}`, {
+          style: { backgroundColor: "#22c55e", color: "#fff" },
+        })
+        return
+      }
 
       const newFile: FileNode = {
         id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         name: fileName,
         type: "file",
-        content,
+        content: snapshot.content,
         filePath,
+        sourceModified: snapshot.modified,
       }
 
       set((state) => ({ files: [...state.files, newFile] }))
-      set({ activeFileId: newFile.id, content })
-      get().updateCounts(content)
+      set({ activeFileId: newFile.id, content: snapshot.content })
+      get().updateCounts(snapshot.content)
 
       toast.success(`已打开: ${fileName}`, {
         style: { backgroundColor: "#22c55e", color: "#fff" },

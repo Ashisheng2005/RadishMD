@@ -9,33 +9,60 @@ import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
 
 export function Editor() {
-  const { theme, toggleSidebar, toggleOutline, saveFile, openFileFromPath } = useEditorStore()
+  const { theme, toggleSidebar, toggleOutline, saveFile, openFileFromPath, isSearchOpen, toggleSearch, closeSearch } = useEditorStore()
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === "/") {
+        e.preventDefault()
+        toggleSearch()
+        return
+      }
+
+      if (e.key === "Escape" && isSearchOpen) {
+        e.preventDefault()
+        closeSearch()
+        return
+      }
+
+      if (e.ctrlKey && e.shiftKey) {
+        const key = e.key.toLowerCase()
+
+        if (key === "z") {
+          e.preventDefault()
+          e.stopPropagation()
+          toggleSidebar()
+          return
+        }
+
+        if (key === "x") {
+          e.preventDefault()
+          e.stopPropagation()
+          toggleOutline()
+          return
+        }
+      }
+
+      const target = e.target as HTMLElement | null
+      const isEditableTarget = Boolean(
+        target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      )
+
+      if (isEditableTarget) {
+        return
+      }
+
       // Ctrl+S: Save
       if (e.ctrlKey && e.key === "s") {
         e.preventDefault()
         saveFile()
         return
       }
-
-      if (!e.ctrlKey || !e.shiftKey) return
-
-      if (e.key === "Z" || e.key === "z") {
-        e.preventDefault()
-        toggleSidebar()
-      }
-
-      if (e.key === "X" || e.key === "x") {
-        e.preventDefault()
-        toggleOutline()
-      }
     }
 
     window.addEventListener("keydown", handleKeyDown)
     return () => window.removeEventListener("keydown", handleKeyDown)
-  }, [toggleSidebar, toggleOutline, saveFile])
+  }, [closeSearch, isSearchOpen, saveFile, toggleOutline, toggleSearch, toggleSidebar])
 
   useEffect(() => {
     // Apply theme to document

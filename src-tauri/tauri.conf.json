@@ -42,6 +42,7 @@
         "ext": ["md"],
         "name": "Markdown Document",
         "description": "Markdown file opened by RadishMD",
+        "mimeType": "text/markdown",
         "role": "Editor"
       }
     ]

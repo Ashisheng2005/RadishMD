@@ -14,6 +14,67 @@ interface Block {
   language?: string
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+function isTableSeparatorLine(line: string) {
+  const trimmed = line.trim()
+
+  if (!trimmed.includes("|")) {
+    return false
+  }
+
+  const cells = trimmed
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim())
+
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
+}
+
+function isTableRowLine(line: string) {
+  return line.includes("|") && line.trim().length > 0
+}
+
+function parseTableMarkdownToHtml(content: string) {
+  const lines = content.split("\n").filter((line) => line.trim().length > 0)
+
+  if (lines.length < 2 || !isTableSeparatorLine(lines[1])) {
+    return `<div class="rounded-lg border border-border bg-muted/20 p-3 font-mono text-sm whitespace-pre-wrap">${escapeHtml(content)}</div>`
+  }
+
+  const headerCells = lines[0]
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => `<th class="border border-border px-3 py-2 text-left font-medium bg-muted">${escapeHtml(cell.trim())}</th>`)
+    .join("")
+
+  const bodyRows = lines.slice(2).map((row) => {
+    const cells = row
+      .trim()
+      .replace(/^\|/, "")
+      .replace(/\|$/, "")
+      .split("|")
+      .map((cell) => `<td class="border border-border px-3 py-2 align-top">${escapeHtml(cell.trim())}</td>`)
+      .join("")
+
+    return `<tr>${cells}</tr>`
+  }).join("")
+
+  return `<div class="overflow-x-auto rounded-lg border border-border bg-background"><table class="w-full border-collapse text-sm"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`
+}
+
+function renderPlainText(text: string) {
+  return escapeHtml(text).replace(/\n/g, "<br>")
+}
+
 function parseMarkdownToBlocks(markdown: string): Block[] {
   const lines = markdown.split("\n")
   const blocks: Block[] = []
@@ -120,6 +181,20 @@ function parseMarkdownToBlocks(markdown: string): Block[] {
       continue
     }
 
+    // Table
+    if (i + 1 < lines.length && isTableRowLine(line) && isTableSeparatorLine(lines[i + 1])) {
+      const tableLines: string[] = [line, lines[i + 1]]
+      i += 2
+
+      while (i < lines.length && isTableRowLine(lines[i])) {
+        tableLines.push(lines[i])
+        i++
+      }
+
+      blocks.push({ id, sourceLine: i - tableLines.length, type: "table", content: tableLines.join("\n") })
+      continue
+    }
+
     // Empty line or paragraph - merge consecutive non-empty lines into one paragraph
     if (line.trim() === "") {
       i++
@@ -178,6 +253,8 @@ function blocksToMarkdown(blocks: Block[]): string {
           return `- [${block.checked ? "x" : " "}] ${block.content}`
         case "hr":
           return "---"
+        case "table":
+          return block.content
         default:
           return block.content
       }
@@ -388,6 +465,36 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
         >
           {block.content}
         </div>
+      </div>
+    )
+  }
+
+  if (block.type === "table") {
+    return (
+      <div
+        className={cn(
+          "my-3 rounded-lg transition-colors",
+          isActive && "ring-2 ring-primary/30"
+        )}
+        onClick={handleClick}
+      >
+        <div
+          ref={ref}
+          contentEditable
+          suppressContentEditableWarning
+          onBlur={handleBlur}
+          onFocus={handleFocus}
+          onKeyDown={(e) => onKeyDown(e, block)}
+          className={cn(
+            "outline-none focus:outline-none",
+            "rounded-lg"
+          )}
+          dangerouslySetInnerHTML={{
+            __html: isEditing
+              ? renderPlainText(block.content)
+              : parseTableMarkdownToHtml(block.content),
+          }}
+        />
       </div>
     )
   }
@@ -842,7 +949,7 @@ export function WysiwygEditor() {
     if (e.key === "Enter") {
       // For paragraph/list/task blocks: insert <br> for newlines (allow multi-line)
       // For other blocks (heading, code, quote, hr): create new block
-      const blockTypesWithMultiLine = ["paragraph", "list", "task"]
+      const blockTypesWithMultiLine = ["paragraph", "list", "task", "table"]
 
       if (blockTypesWithMultiLine.includes(block.type) || e.shiftKey) {
         // Insert <br> at cursor position (multi-line support)

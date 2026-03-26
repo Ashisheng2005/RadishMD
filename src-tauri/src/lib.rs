@@ -1,11 +1,31 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::UNIX_EPOCH;
+use serde::Serialize;
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
+
+#[derive(Serialize)]
+struct FileSnapshot {
+    content: String,
+    modified: Option<u64>,
+}
 
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn read_file_snapshot(path: String) -> Result<FileSnapshot, String> {
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let modified = fs::metadata(&path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64);
+
+    Ok(FileSnapshot { content, modified })
 }
 
 #[tauri::command]
@@ -38,6 +58,7 @@ pub fn run() {
         .plugin(tauri_plugin_cli::init())
         .invoke_handler(tauri::generate_handler![
             read_file,
+            read_file_snapshot,
             write_file,
             get_file_name,
             get_cli_file_path

@@ -10,16 +10,32 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   const html = useMemo(() => {
     let result = content
 
-    // Code blocks (must be first to avoid conflicts)
+    const escapeHtml = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+
+    const codeBlocks: Array<{ token: string; html: string }> = []
+
+    // Code blocks: extract first so later markdown rules do not touch code contents.
     result = result.replace(
       /```(\w+)?\n([\s\S]*?)```/g,
-      '<pre class="bg-muted p-4 rounded-md overflow-x-auto my-4"><code class="text-sm font-mono">$2</code></pre>'
+      (_match, language = "", code) => {
+        const token = `__CODE_BLOCK_${codeBlocks.length}__`
+        codeBlocks.push({
+          token,
+          html: `<pre class="bg-muted p-4 rounded-md overflow-x-auto my-4 !font-mono"><code class="text-sm !font-mono whitespace-pre" data-language="${escapeHtml(language)}">${escapeHtml(code)}</code></pre>`,
+        })
+        return token
+      }
     )
 
     // Inline code
     result = result.replace(
       /`([^`]+)`/g,
-      '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>'
+      (_match, code) =>
+        `<code class="bg-muted px-1.5 py-0.5 rounded text-sm !font-mono text-primary">${escapeHtml(code)}</code>`
     )
 
     // Headers
@@ -166,6 +182,10 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         return block
       })
       .join("\n\n")
+
+    for (const { token, html } of codeBlocks) {
+      result = result.split(token).join(html)
+    }
 
     return result
   }, [content])

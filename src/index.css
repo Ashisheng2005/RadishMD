@@ -131,6 +131,15 @@
   pointer-events: none;
 }
 
+.prose pre,
+.prose pre code {
+  font-family: var(--font-mono) !important;
+}
+
+.prose pre code {
+  white-space: pre;
+}
+
 [contenteditable]:focus {
   outline: none;
 }
