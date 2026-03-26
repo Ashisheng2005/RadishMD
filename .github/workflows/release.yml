@@ -63,7 +63,8 @@ jobs:
       - name: Build and release Tauri app
         uses: tauri-apps/tauri-action@v0.6.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 使用专门的 PAT，避免 GITHUB_TOKEN 在创建 release 时被 GitHub 限制
+          GITHUB_TOKEN: ${{ secrets.TAURI_RELEASE_TOKEN }}
         with:
           tagName: v__VERSION__
           releaseName: RadishMD v__VERSION__
