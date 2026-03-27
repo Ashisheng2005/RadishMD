@@ -62,7 +62,7 @@ jobs:
       # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
       - name: Build and release Tauri app
         # uses: tauri-apps/tauri-action@v0.6.0
-        users: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v1
         env:
           # 使用专门的 PAT，避免 GITHUB_TOKEN 在创建 release 时被 GitHub 限制
           GITHUB_TOKEN: ${{ secrets.TAURI_RELEASE_TOKEN }}
