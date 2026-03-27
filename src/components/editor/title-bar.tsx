@@ -5,7 +5,8 @@ import {
   PanelRightOpen,
   Moon,
   Sun,
-  Settings,
+  Monitor,
+  SlidersHorizontal,
   FileEdit,
   Search,
   FileText,
@@ -365,7 +366,9 @@ export function TitleBar() {
                 className="h-7 w-7"
                 onClick={toggleTheme}
               >
-                {theme === "dark" ? (
+                {theme === "system" ? (
+                  <Monitor className="h-4 w-4" />
+                ) : theme === "dark" ? (
                   <Sun className="h-4 w-4" />
                 ) : (
                   <Moon className="h-4 w-4" />
@@ -373,7 +376,11 @@ export function TitleBar() {
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">
-              {theme === "dark" ? "浅色主题" : "深色主题"}
+              {theme === "system"
+                ? "自动主题（跟随系统）"
+                : theme === "dark"
+                  ? "浅色主题"
+                  : "深色主题"}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -422,7 +429,7 @@ export function TitleBar() {
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" className="h-7 w-7">
-                <Settings className="h-4 w-4" />
+                <SlidersHorizontal className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">

@@ -26,7 +26,7 @@ interface EditorState {
   isSidebarOpen: boolean
   isOutlineOpen: boolean
   isSearchOpen: boolean
-  theme: "light" | "dark"
+  theme: "light" | "dark" | "system"
   editMode: "split" | "wysiwyg"
   wordCount: number
   charCount: number
@@ -87,7 +87,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   isSidebarOpen: true,
   isOutlineOpen: true,
   isSearchOpen: false,
-  theme: "dark",
+  theme: "system",
   editMode: "split",
   wordCount: 0,
   charCount: 0,
@@ -153,7 +153,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   toggleSidebar: () => set((state) => ({ isSidebarOpen: !state.isSidebarOpen })),
   toggleOutline: () => set((state) => ({ isOutlineOpen: !state.isOutlineOpen })),
   toggleTheme: () =>
-    set((state) => ({ theme: state.theme === "light" ? "dark" : "light" })),
+    set((state) => ({
+      theme:
+        state.theme === "system"
+          ? "light"
+          : state.theme === "light"
+            ? "dark"
+            : "system",
+    })),
   toggleEditMode: () =>
     set((state) => ({ editMode: state.editMode === "split" ? "wysiwyg" : "split" })),
 

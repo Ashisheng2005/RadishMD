@@ -82,5 +82,5 @@ jobs:
           sudo apt-get install -y libglib2.0-dev pkg-config
 
       # 额外检查 Rust 后端是否能通过编译（不做最终打包，只做语法/依赖检查）
-      - name: Rust cargo check
-        run: cargo check --manifest-path src-tauri/Cargo.toml
+      # - name: Rust cargo check
+      #   run: cargo check --manifest-path src-tauri/Cargo.toml

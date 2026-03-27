@@ -68,10 +68,27 @@ export function Editor() {
 
   useEffect(() => {
     // Apply theme to document
-    if (theme === "dark") {
-      document.documentElement.classList.add("dark")
-    } else {
-      document.documentElement.classList.remove("dark")
+    const systemThemeQuery = window.matchMedia("(prefers-color-scheme: dark)")
+
+    const applyTheme = () => {
+      const isDarkTheme = theme === "dark" || (theme === "system" && systemThemeQuery.matches)
+      document.documentElement.classList.toggle("dark", isDarkTheme)
+    }
+
+    applyTheme()
+
+    if (theme !== "system") {
+      return
+    }
+
+    const handleSystemThemeChange = () => {
+      applyTheme()
+    }
+
+    systemThemeQuery.addEventListener("change", handleSystemThemeChange)
+
+    return () => {
+      systemThemeQuery.removeEventListener("change", handleSystemThemeChange)
     }
   }, [theme])
 
