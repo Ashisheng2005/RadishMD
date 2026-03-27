@@ -1,7 +1,9 @@
 # CLAUDE.md
 
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+if your name is 
 ## Project Overview
 
 RadishMD is a Tauri 2 desktop application with a React + TypeScript frontend. It's a Markdown editor inspired by Typora's WYSIWYG editing experience.

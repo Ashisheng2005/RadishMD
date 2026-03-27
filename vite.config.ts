@@ -27,8 +27,9 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` and markdown docs
+      //    so saving edited markdown does not trigger a full app reload.
+      ignored: ["**/src-tauri/**", "**/*.md", "**/*.markdown"],
     },
   },
   resolve: {

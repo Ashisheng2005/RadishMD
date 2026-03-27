@@ -172,7 +172,7 @@ function FileTreeItem({
       onDragStart={handleDragStart}
       onClick={() => setActiveFile(node.id)}
       className={cn(
-        "w-full flex items-center gap-1.5 px-2 py-1 text-sm rounded-sm",
+        "relative w-full flex items-center gap-1.5 px-2 py-1 pr-6 text-sm rounded-sm",
         "hover:bg-sidebar-accent transition-colors cursor-grab active:cursor-grabbing",
         isActive
           ? "bg-sidebar-accent text-sidebar-foreground font-medium"
@@ -182,6 +182,13 @@ function FileTreeItem({
     >
       <File className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="truncate">{node.name}</span>
+      {node.isDirty ? (
+        <span
+          className="pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-amber-500"
+          aria-label="未保存"
+          title="未保存"
+        />
+      ) : null}
     </button>
   )
 }

@@ -12,6 +12,17 @@ export function Editor() {
   const { theme, toggleSidebar, toggleOutline, saveFile, openFileFromPath, isSearchOpen, toggleSearch, closeSearch } = useEditorStore()
 
   useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return
+    }
+
+    console.log("[RadishMD][Editor] mount")
+    return () => {
+      console.log("[RadishMD][Editor] unmount")
+    }
+  }, [])
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
 

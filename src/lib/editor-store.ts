@@ -12,6 +12,7 @@ export interface FileNode {
   isExpanded?: boolean
   filePath?: string
   sourceModified?: number | null
+  isDirty?: boolean
 }
 
 interface FileSnapshot {
@@ -45,7 +46,12 @@ interface EditorState {
   addFiles: (files: FileNode[]) => void
   findNodeById: (id: string) => FileNode | null
   findNodeByPath: (filePath: string) => FileNode | null
-  updateFileContent: (id: string, content: string, sourceModified?: number | null) => void
+  updateFileContent: (
+    id: string,
+    content: string,
+    sourceModified?: number | null,
+    isDirty?: boolean,
+  ) => void
   startCreating: (type: "file" | "folder") => void
   confirmCreate: (name: string) => void
   cancelCreate: () => void
@@ -56,6 +62,26 @@ interface EditorState {
 }
 
 const initialFiles: FileNode[] = []
+
+function debugEditorLog(label: string, details?: Record<string, unknown>) {
+  if (details) {
+    console.log(`[RadishMD][store] ${label}`, details)
+    return
+  }
+
+  console.log(`[RadishMD][store] ${label}`)
+}
+
+function summarizeFiles(files: FileNode[]) {
+  return files.map((file) => ({
+    id: file.id,
+    name: file.name,
+    type: file.type,
+    filePath: file.filePath,
+    isDirty: file.isDirty ?? false,
+    children: file.children?.length ?? 0,
+  }))
+}
 
 export async function readFileSnapshot(filePath: string): Promise<FileSnapshot> {
   const snapshot = await invoke<FileSnapshot>("read_file_snapshot", { path: filePath })
@@ -107,6 +133,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const file = findFile(get().files)
     if (file) {
+      debugEditorLog("setActiveFile:start", {
+        id,
+        fileName: file.name,
+        filePath: file.filePath,
+        files: summarizeFiles(get().files),
+      })
       set({ activeFileId: id })
 
       if (file.filePath) {
@@ -119,7 +151,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           const modifiedChanged = snapshot.modified !== file.sourceModified
 
           if (modifiedChanged) {
-            get().updateFileContent(id, snapshot.content, snapshot.modified)
+            debugEditorLog("setActiveFile:content-refreshed-from-disk", {
+              id,
+              filePath: file.filePath,
+              sourceModified: file.sourceModified,
+              snapshotModified: snapshot.modified,
+            })
+            get().updateFileContent(id, snapshot.content, snapshot.modified, false)
             set({ content: snapshot.content })
             get().updateCounts(snapshot.content)
             return
@@ -130,6 +168,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       }
 
       const currentContent = file.content || ""
+      debugEditorLog("setActiveFile:use-in-memory-content", {
+        id,
+        fileName: file.name,
+        contentLength: currentContent.length,
+      })
       set({ content: currentContent })
       get().updateCounts(currentContent)
     }
@@ -139,7 +182,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const { activeFileId } = get()
 
     if (activeFileId) {
-      get().updateFileContent(activeFileId, content)
+      debugEditorLog("setContent:dirty", {
+        activeFileId,
+        contentLength: content.length,
+      })
+      get().updateFileContent(activeFileId, content, undefined, true)
     }
 
     set({ content })
@@ -226,12 +273,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return findInNodes(get().files)
   },
 
-  updateFileContent: (id: string, content: string, sourceModified?: number | null) => {
+  updateFileContent: (id: string, content: string, sourceModified?: number | null, isDirty?: boolean) => {
+    debugEditorLog("updateFileContent", {
+      id,
+      contentLength: content.length,
+      sourceModified,
+      isDirty,
+    })
     set((state) => ({
       files: updateFileInNodes(state.files, id, (node) => ({
         ...node,
         content,
         ...(sourceModified !== undefined ? { sourceModified } : {}),
+        ...(isDirty !== undefined ? { isDirty } : {}),
       })),
     }))
   },
@@ -321,13 +375,38 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const file = get().findNodeById(activeFileId)
     if (!file || file.type !== "file" || !file.filePath) {
       // No file path, do Save As
+      debugEditorLog("saveFile:redirect-to-save-as", {
+        activeFileId,
+        contentLength: content.length,
+      })
       await get().saveFileAs()
       return
     }
 
     // Direct save
     try {
+      debugEditorLog("saveFile:start", {
+        activeFileId,
+        filePath: file.filePath,
+        fileName: file.name,
+        contentLength: content.length,
+        files: summarizeFiles(get().files),
+      })
       await invoke("write_file", { path: file.filePath, content })
+      const snapshot = await readFileSnapshot(file.filePath)
+      set((state) => ({
+        files: updateFileInNodes(state.files, activeFileId, (node) => ({
+          ...node,
+          sourceModified: snapshot.modified,
+          isDirty: false,
+        })),
+      }))
+      debugEditorLog("saveFile:success", {
+        activeFileId,
+        filePath: file.filePath,
+        snapshotModified: snapshot.modified,
+        files: summarizeFiles(get().files),
+      })
       toast.success(`已保存: ${file.name}`, {
         style: { backgroundColor: "#22c55e", color: "#fff" },
       })
@@ -353,6 +432,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!selected) return
 
     try {
+      debugEditorLog("saveFileAs:start", {
+        activeFileId,
+        selected,
+        contentLength: content.length,
+        files: summarizeFiles(get().files),
+      })
       await invoke("write_file", { path: selected, content })
       const snapshot = await readFileSnapshot(selected)
 
@@ -365,8 +450,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           name: newName,
           content,
           sourceModified: snapshot.modified,
+          isDirty: false,
         })),
       }))
+      debugEditorLog("saveFileAs:success", {
+        activeFileId,
+        selected,
+        snapshotModified: snapshot.modified,
+        files: summarizeFiles(get().files),
+      })
       toast.success(`已保存: ${newName}`, {
         style: { backgroundColor: "#22c55e", color: "#fff" },
       })
@@ -379,12 +471,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   openFileFromPath: async (filePath: string) => {
     try {
+      debugEditorLog("openFileFromPath:start", { filePath, files: summarizeFiles(get().files) })
       const snapshot = await readFileSnapshot(filePath)
       const fileName = await invoke<string>("get_file_name", { filePath })
       const existingFile = get().findNodeByPath(filePath)
 
       if (existingFile) {
-        get().updateFileContent(existingFile.id, snapshot.content, snapshot.modified)
+        debugEditorLog("openFileFromPath:existing-file", {
+          filePath,
+          fileName,
+          existingFileId: existingFile.id,
+        })
+        get().updateFileContent(existingFile.id, snapshot.content, snapshot.modified, false)
         await get().setActiveFile(existingFile.id)
         toast.success(`已打开: ${fileName}`, {
           style: { backgroundColor: "#22c55e", color: "#fff" },
@@ -399,16 +497,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         content: snapshot.content,
         filePath,
         sourceModified: snapshot.modified,
+        isDirty: false,
       }
 
       set((state) => ({ files: [...state.files, newFile] }))
       set({ activeFileId: newFile.id, content: snapshot.content })
       get().updateCounts(snapshot.content)
 
+      debugEditorLog("openFileFromPath:new-file", {
+        filePath,
+        fileName,
+        newFileId: newFile.id,
+        files: summarizeFiles(get().files),
+      })
+
       toast.success(`已打开: ${fileName}`, {
         style: { backgroundColor: "#22c55e", color: "#fff" },
       })
     } catch (e) {
+      debugEditorLog("openFileFromPath:error", {
+        filePath,
+        error: e instanceof Error ? e.message : String(e),
+      })
       toast.error(`打开失败: ${filePath}`, {
         style: { backgroundColor: "#ef4444", color: "#fff" },
       })
