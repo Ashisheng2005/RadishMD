@@ -61,15 +61,16 @@ jobs:
 
       # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
       - name: Build and release Tauri app
-        # uses: tauri-apps/tauri-action@v0.6.0
         uses: softprops/action-gh-release@v1
-        env:
-          # 使用专门的 PAT，避免 GITHUB_TOKEN 在创建 release 时被 GitHub 限制
-          GITHUB_TOKEN: ${{ secrets.TAURI_RELEASE_TOKEN }}
         with:
-          tagName: v__VERSION__
-          releaseName: RadishMD v__VERSION__
-          releaseBody: "RadishMD automated release build."
-          releaseDraft: false
-          prerelease: false
-          args: ${{ matrix.args }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.get_msg.outputs.body }}
+          files: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/dmg/*.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
