@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           # Linux 会产出 deb / rpm
-          - platform: ubuntu-lastest
+          - platform: ubuntu-latest
             args: ""
           # Windows 会产出 exe / installer
           - platform: windows-latest
@@ -46,7 +46,7 @@ jobs:
 
       # Linux runner 需要额外系统库，Tauri 在打包桌面程序时会用到
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-lastest'
+        if: matrix.platform == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
