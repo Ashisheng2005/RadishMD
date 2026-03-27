@@ -40,6 +40,10 @@ jobs:
           node-version: 22
           cache: npm
 
+      # 安装 Rust toolchain
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       # 安装前端依赖
       - name: Install frontend dependencies
         run: npm ci
@@ -55,9 +59,13 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      # 安装 Rust toolchain
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+
+      # 跑 TypeScript 检查 + Vite 构建，确认前端可编译
+      - name: TypeScript and frontend build
+        run: npm run build
+
+      - name: Full Tauri build
+        run: npm run tauri build
 
       # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
       - name: Build and release Tauri app
