@@ -13,6 +13,15 @@ export function Editor() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase()
+
+      // Save should work even while focus is inside the editor.
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "s") {
+        e.preventDefault()
+        saveFile()
+        return
+      }
+
       if (e.ctrlKey && e.key === "/") {
         e.preventDefault()
         toggleSearch()
@@ -49,13 +58,6 @@ export function Editor() {
       )
 
       if (isEditableTarget) {
-        return
-      }
-
-      // Ctrl+S: Save
-      if (e.ctrlKey && e.key === "s") {
-        e.preventDefault()
-        saveFile()
         return
       }
     }
