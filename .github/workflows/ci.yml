@@ -1,3 +1,40 @@
+# name: ci
+
+# on:
+#   # 任何分支 push 都做一次校验，PR 也同样校验。
+#   push:
+#     branches:
+#       - "**"
+#   pull_request:
+
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       # 取出仓库代码
+#       - name: Checkout repository
+#         uses: actions/checkout@v4
+
+#       # 安装 Node.js，并开启 npm 缓存
+#       - name: Setup Node.js
+#         uses: actions/setup-node@v4
+#         with:
+#           node-version: 22
+#           cache: npm
+
+#       # 安装前端依赖
+#       - name: Install frontend dependencies
+#         run: npm install
+
+#       # 跑 TypeScript 检查 + Vite 构建，确认前端可编译
+#       - name: TypeScript and frontend build
+#         run: npm run build
+
+#       # 额外检查 Rust 后端是否能通过编译（不做最终打包，只做语法/依赖检查）
+#       - name: Rust cargo check
+#         run: cargo check --manifest-path src-tauri/Cargo.toml
+
 name: ci
 
 on:
@@ -25,11 +62,24 @@ jobs:
 
       # 安装前端依赖
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm install
 
       # 跑 TypeScript 检查 + Vite 构建，确认前端可编译
       - name: TypeScript and frontend build
         run: npm run build
+
+      # 安装 Rust 工具链
+      - name: Setup Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+
+      # 安装系统依赖（glib 等）
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev pkg-config
 
       # 额外检查 Rust 后端是否能通过编译（不做最终打包，只做语法/依赖检查）
       - name: Rust cargo check
