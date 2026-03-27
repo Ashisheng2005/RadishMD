@@ -19,7 +19,7 @@ jobs:
       matrix:
         include:
           # Linux 会产出 deb / rpm
-          - platform: ubuntu-22.04
+          - platform: ubuntu-lastest
             args: ""
           # Windows 会产出 exe / installer
           - platform: windows-latest
@@ -46,7 +46,7 @@ jobs:
 
       # Linux runner 需要额外系统库，Tauri 在打包桌面程序时会用到
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-lastest'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -61,7 +61,8 @@ jobs:
 
       # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
       - name: Build and release Tauri app
-        uses: tauri-apps/tauri-action@v0.6.0
+        # uses: tauri-apps/tauri-action@v0.6.0
+        users: softprops/action-gh-release@v1
         env:
           # 使用专门的 PAT，避免 GITHUB_TOKEN 在创建 release 时被 GitHub 限制
           GITHUB_TOKEN: ${{ secrets.TAURI_RELEASE_TOKEN }}
