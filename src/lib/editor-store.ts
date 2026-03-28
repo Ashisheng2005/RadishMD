@@ -29,6 +29,7 @@ interface EditorState {
   isSearchOpen: boolean
   theme: "light" | "dark" | "system"
   editMode: "split" | "wysiwyg"
+  splitViewMode: "split" | "editor" | "render"
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
@@ -41,6 +42,7 @@ interface EditorState {
   toggleOutline: () => void
   toggleTheme: () => void
   toggleEditMode: () => void
+  setSplitViewMode: (mode: "split" | "editor" | "render") => void
   toggleFolder: (id: string) => void
   updateCounts: (content: string) => void
   addFiles: (files: FileNode[]) => void
@@ -115,6 +117,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   isSearchOpen: false,
   theme: "system",
   editMode: "split",
+  splitViewMode: "split",
   wordCount: 0,
   charCount: 0,
   creatingType: null,
@@ -210,6 +213,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
   toggleEditMode: () =>
     set((state) => ({ editMode: state.editMode === "split" ? "wysiwyg" : "split" })),
+
+  setSplitViewMode: (mode: "split" | "editor" | "render") => set({ splitViewMode: mode }),
 
   toggleFolder: (id: string) => {
     const toggleInNodes = (nodes: FileNode[]): FileNode[] => {

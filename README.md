@@ -31,6 +31,10 @@ npm run build
 npm run tauri dev
 npm run tauri build
 ```
+## 安装
+```bash
+sudo dpkg -i xxx.deb
+```
 
 ## 说明
 
