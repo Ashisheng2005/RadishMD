@@ -1,5 +1,6 @@
 import { useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { useEditorStore } from "@/lib/editor-store"
 import { TitleBar } from "./title-bar"
 import { Sidebar } from "./sidebar"
@@ -9,7 +10,25 @@ import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
 
 export function Editor() {
-  const { theme, toggleSidebar, toggleOutline, saveFile, openFileFromPath, isSearchOpen, toggleSearch, closeSearch } = useEditorStore()
+  const {
+    theme,
+    toggleSidebar,
+    toggleOutline,
+    saveFile,
+    openFileFromPath,
+    checkActiveFileForExternalChanges,
+    isSearchOpen,
+    toggleSearch,
+    closeSearch,
+  } = useEditorStore()
+
+  const activeFilePath = useEditorStore((state) => {
+    if (!state.activeFileId) {
+      return null
+    }
+
+    return state.findNodeById(state.activeFileId)?.filePath ?? null
+  })
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
@@ -111,6 +130,59 @@ export function Editor() {
       }
     })
   }, [openFileFromPath])
+
+  useEffect(() => {
+    const syncFileWatcher = async () => {
+      if (activeFilePath) {
+        await invoke("watch_file_changes", { filePath: activeFilePath })
+        return
+      }
+
+      await invoke("clear_file_watcher")
+    }
+
+    void syncFileWatcher()
+
+    return () => {
+      void invoke("clear_file_watcher")
+    }
+  }, [activeFilePath])
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+
+    void listen<string>("radishmd://file-changed", () => {
+      void checkActiveFileForExternalChanges()
+    }).then((dispose) => {
+      if (cancelled) {
+        dispose()
+        return
+      }
+
+      unlisten = dispose
+    })
+
+    const handleFocus = () => {
+      void checkActiveFileForExternalChanges()
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void checkActiveFileForExternalChanges()
+      }
+    }
+
+    window.addEventListener("focus", handleFocus)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+
+    return () => {
+      cancelled = true
+      unlisten?.()
+      window.removeEventListener("focus", handleFocus)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+    }
+  }, [checkActiveFileForExternalChanges])
 
   return (
     <div

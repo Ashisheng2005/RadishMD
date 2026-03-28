@@ -1,7 +1,10 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 use serde::Serialize;
+use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
 
@@ -10,6 +13,10 @@ struct FileSnapshot {
     content: String,
     modified: Option<u64>,
 }
+
+static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> = LazyLock::new(|| {
+    Mutex::new(None)
+});
 
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
@@ -50,6 +57,48 @@ fn get_cli_file_path(app: tauri::AppHandle) -> Option<String> {
         .and_then(|file_arg| file_arg.value.as_str().map(|s| s.to_string()))
 }
 
+#[tauri::command]
+fn watch_file_changes(app: tauri::AppHandle, file_path: String) -> Result<(), String> {
+    let mut watcher_slot = FILE_WATCHER
+        .lock()
+        .map_err(|_| "Failed to lock file watcher".to_string())?;
+
+    if watcher_slot
+        .as_ref()
+        .map(|(current_path, _)| current_path == &file_path)
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+
+    watcher_slot.take();
+
+    let watched_path = file_path.clone();
+    let app_handle = app.clone();
+    let mut watcher = recommended_watcher(move |result: notify::Result<Event>| {
+        if result.is_ok() {
+            let _ = app_handle.emit("radishmd://file-changed", watched_path.clone());
+        }
+    })
+    .map_err(|e| e.to_string())?;
+
+    watcher
+        .watch(PathBuf::from(&file_path).as_path(), RecursiveMode::NonRecursive)
+        .map_err(|e| e.to_string())?;
+
+    *watcher_slot = Some((file_path, watcher));
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_file_watcher() -> Result<(), String> {
+    let mut watcher_slot = FILE_WATCHER
+        .lock()
+        .map_err(|_| "Failed to lock file watcher".to_string())?;
+    watcher_slot.take();
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -61,7 +110,9 @@ pub fn run() {
             read_file_snapshot,
             write_file,
             get_file_name,
-            get_cli_file_path
+            get_cli_file_path,
+            watch_file_changes,
+            clear_file_watcher
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();

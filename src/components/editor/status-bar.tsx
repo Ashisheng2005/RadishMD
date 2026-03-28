@@ -3,7 +3,19 @@ import { Button } from "@/components/ui/button"
 import { Columns2, Eye, FileEdit } from "lucide-react"
 
 export function StatusBar() {
-  const { wordCount, charCount, editMode, splitViewMode, setSplitViewMode } = useEditorStore()
+  const {
+    wordCount,
+    charCount,
+    editMode,
+    splitViewMode,
+    setSplitViewMode,
+    activeFileId,
+    findNodeById,
+    saveFileById,
+    reloadFileFromDiskById,
+  } = useEditorStore()
+
+  const activeFile = activeFileId ? findNodeById(activeFileId) : null
 
   const splitViewLabel =
     splitViewMode === "editor"
@@ -40,6 +52,22 @@ export function StatusBar() {
     setSplitViewMode("split")
   }
 
+  const handleReloadExternalChanges = async () => {
+    if (!activeFile || !activeFile.hasExternalChanges) {
+      return
+    }
+
+    await reloadFileFromDiskById(activeFile.id)
+  }
+
+  const handleOverwriteExternalChanges = async () => {
+    if (!activeFile || !activeFile.hasExternalChanges) {
+      return
+    }
+
+    await saveFileById(activeFile.id)
+  }
+
   return (
     <footer className="h-8 bg-card border-t border-border flex items-center justify-between gap-3 px-3 text-xs text-muted-foreground">
       <div className="flex items-center gap-3 min-w-0">
@@ -48,6 +76,28 @@ export function StatusBar() {
         <span className="hidden sm:inline">当前：{editMode === "split" ? splitViewLabel : "WYSIWYG"}</span>
       </div>
       <div className="flex items-center gap-3">
+        {activeFile?.hasExternalChanges && (
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-amber-600 hover:text-amber-500"
+              onClick={() => void handleReloadExternalChanges()}
+            >
+              重载
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-amber-600 hover:text-amber-500"
+              onClick={() => void handleOverwriteExternalChanges()}
+            >
+              覆盖
+            </Button>
+          </div>
+        )}
         {editMode === "split" && (
           <Button
             type="button"

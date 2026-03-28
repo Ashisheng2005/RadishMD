@@ -1,4 +1,8 @@
-import { useMemo } from "react"
+import { useMemo, useState } from "react"
+import { openPath, openUrl } from "@tauri-apps/plugin-opener"
+import { ImageLightbox } from "./image-lightbox"
+import { buildImageTag, parseImageReference } from "@/lib/image-utils"
+import { useEditorStore } from "@/lib/editor-store"
 import { cn } from "@/lib/utils"
 
 interface MarkdownRendererProps {
@@ -7,6 +11,15 @@ interface MarkdownRendererProps {
 }
 
 export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null)
+  const activeFilePath = useEditorStore((state) => {
+    if (!state.activeFileId) {
+      return null
+    }
+
+    return state.findNodeById(state.activeFileId)?.filePath ?? null
+  })
+
   const html = useMemo(() => {
     let result = content
 
@@ -84,16 +97,24 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
       '<del class="line-through text-muted-foreground">$1</del>'
     )
 
+    // Images
+    result = result.replace(
+      /!\[([^\]]*)\]\(([^)]+)\)/g,
+      (_match, alt, src) => buildImageTag(src, alt, activeFilePath)
+    )
+    result = result.replace(
+      /!([^\[\]\(\)\n]+)\(([^)]+)\)/g,
+      (_match, alt, src) => buildImageTag(src, alt, activeFilePath)
+    )
+    result = result.replace(
+      /!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g,
+      (_match, alt, src) => buildImageTag(src, alt, activeFilePath)
+    )
+
     // Links
     result = result.replace(
       /\[([^\]]+)\]\(([^)]+)\)/g,
       '<a href="$2" class="text-primary hover:underline">$1</a>'
-    )
-
-    // Images
-    result = result.replace(
-      /!\[([^\]]*)\]\(([^)]+)\)/g,
-      '<img src="$2" alt="$1" class="max-w-full rounded-md my-4" />'
     )
 
     // Blockquotes
@@ -169,6 +190,13 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     result = result
       .split("\n\n")
       .map((block) => {
+        const trimmedBlock = block.trim()
+        const parsedImageReference = parseImageReference(trimmedBlock)
+
+        if (parsedImageReference) {
+          return buildImageTag(parsedImageReference.src, parsedImageReference.alt, activeFilePath)
+        }
+
         if (
           block.startsWith("<") ||
           block.startsWith("-") ||
@@ -188,18 +216,83 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     }
 
     return result
-  }, [content])
+  }, [content, activeFilePath])
+
+  function openRenderedTarget(target: string) {
+    const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(target)
+    const isProbablyUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(target) && !isWindowsPath
+
+    if (isProbablyUrl) {
+      void openUrl(target)
+      return
+    }
+
+    void openPath(target)
+  }
+
+  const handleClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement | null
+    if (!target) return
+
+    const imageElement = target.closest("img[src]") as HTMLImageElement | null
+    if (imageElement) {
+      const imageSource = imageElement.getAttribute("src")
+      if (!imageSource) return
+
+      event.preventDefault()
+
+      if (event.ctrlKey || event.metaKey) {
+        openRenderedTarget(imageSource)
+        return
+      }
+
+      setPreviewImage({
+        src: imageSource,
+        alt: imageElement.getAttribute("alt") || undefined,
+      })
+      return
+    }
+
+    const linkElement = target.closest("a[href]") as HTMLAnchorElement | null
+    if (!linkElement) return
+
+    const targetUrl = linkElement.getAttribute("href")
+    if (!targetUrl) return
+
+    event.preventDefault()
+
+    if (!event.ctrlKey && !event.metaKey) {
+      return
+    }
+
+    openRenderedTarget(targetUrl)
+  }
 
   return (
-    <div
-      className={cn(
-        "prose prose-sm max-w-none",
-        "prose-headings:text-foreground prose-p:text-foreground",
-        "prose-strong:text-foreground prose-em:text-foreground",
-        "prose-code:text-primary",
-        className
+    <>
+      <div
+        className={cn(
+          "prose prose-sm max-w-none",
+          "prose-headings:text-foreground prose-p:text-foreground",
+          "prose-strong:text-foreground prose-em:text-foreground",
+          "prose-code:text-primary",
+          className
+        )}
+        onClickCapture={handleClickCapture}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {previewImage && (
+        <ImageLightbox
+          open={Boolean(previewImage)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPreviewImage(null)
+            }
+          }}
+          src={previewImage.src}
+          alt={previewImage.alt}
+        />
       )}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    </>
   )
 }

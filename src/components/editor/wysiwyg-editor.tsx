@@ -1,8 +1,11 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { openPath, openUrl } from "@tauri-apps/plugin-opener"
 import { useEditorStore } from "@/lib/editor-store"
+import { buildImageTag, extractImageSourceFromClipboard, getImageAltFromSource, isStandaloneImageReference, parseImageReference, resolveImageSource } from "@/lib/image-utils"
 import { cn } from "@/lib/utils"
+import { ImageLightbox } from "./image-lightbox"
 import { FormatType, Toolbar } from "./toolbar"
 
 interface Block {
@@ -262,8 +265,14 @@ function blocksToMarkdown(blocks: Block[]): string {
     .join("\n")
 }
 
-function renderInlineMarkdown(text: string): string {
+function renderInlineMarkdown(text: string, baseFilePath?: string | null): string {
   let result = text
+
+  const trimmedText = text.trim()
+  const parsedImageReference = parseImageReference(trimmedText)
+  if (parsedImageReference) {
+    return buildImageTag(parsedImageReference.src, parsedImageReference.alt, baseFilePath)
+  }
 
   // Escape HTML
   result = result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
@@ -283,16 +292,56 @@ function renderInlineMarkdown(text: string): string {
   // Strikethrough
   result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
 
+  // Images
+  result = result.replace(
+    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    (_match, alt, src) => buildImageTag(src, alt, baseFilePath)
+  )
+  result = result.replace(
+    /!([^\[\]\(\)\n]+)\(([^)]+)\)/g,
+    (_match, alt, src) => buildImageTag(src, alt, baseFilePath)
+  )
+  result = result.replace(
+    /!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g,
+    (_match, alt, src) => buildImageTag(src, alt, baseFilePath)
+  )
+
   // Inline code
   result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
 
   // Links
   result = result.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" class="text-primary underline underline-offset-2">$1</a>'
+    '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>'
   )
 
   return result
+}
+
+function isImageOnlyMarkdown(text: string) {
+  const trimmed = text.trim()
+
+  if (!trimmed) {
+    return false
+  }
+
+  return (
+    isStandaloneImageReference(trimmed) ||
+    /^!\[[^\]]*\]\([^)]+\)$/.test(trimmed) ||
+    /^![^\[\]\(\)\n]+\([^)]+\)$/.test(trimmed)
+  )
+}
+
+function openRenderedTarget(target: string) {
+  const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(target)
+  const isProbablyUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(target) && !isWindowsPath
+
+  if (isProbablyUrl) {
+    void openUrl(target)
+    return
+  }
+
+  void openPath(target)
 }
 
 interface BlockEditorProps {
@@ -302,9 +351,11 @@ interface BlockEditorProps {
   onToggleTask?: () => void
   isActive: boolean
   onClick: () => void
+  onRenderedContentClick: (event: React.MouseEvent<HTMLElement>) => void
+  baseFilePath?: string | null
 }
 
-function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onClick }: BlockEditorProps) {
+function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onClick, onRenderedContentClick, baseFilePath }: BlockEditorProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [isEditing, setIsEditing] = useState(false)
 
@@ -321,6 +372,39 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
   const handleFocus = useCallback(() => {
     setIsEditing(true)
   }, [])
+
+  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLElement>) => {
+    const html = event.clipboardData.getData("text/html")
+    const text = event.clipboardData.getData("text/plain")
+    const imageSource = extractImageSourceFromClipboard(html, text)
+
+    if (!imageSource) {
+      return
+    }
+
+    event.preventDefault()
+
+    const markdownImage = `![${getImageAltFromSource(imageSource)}](${imageSource})`
+    const selection = window.getSelection()
+    if (!selection || selection.rangeCount === 0) {
+      return
+    }
+
+    const range = selection.getRangeAt(0)
+    range.deleteContents()
+    const textNode = document.createTextNode(markdownImage)
+    range.insertNode(textNode)
+    range.setStartAfter(textNode)
+    range.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(range)
+
+    window.setTimeout(() => {
+      if (ref.current) {
+        onUpdate(ref.current.innerText)
+      }
+    }, 0)
+  }, [onUpdate])
 
   const handleClick = useCallback(() => {
     onClick()
@@ -360,6 +444,10 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
   }
 
   if (block.type === "task") {
+    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
+      ? block.content.replace(/\n/g, "<br>")
+      : renderInlineMarkdown(block.content, baseFilePath)
+
     return (
       <div
         className={cn(
@@ -391,6 +479,8 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           ref={ref}
           contentEditable
           suppressContentEditableWarning
+          onClickCapture={onRenderedContentClick}
+          onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
           onKeyDown={(e) => onKeyDown(e, block)}
@@ -400,9 +490,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
             block.checked && "line-through text-muted-foreground"
           )}
           dangerouslySetInnerHTML={{
-            __html: isEditing
-              ? block.content.replace(/\n/g, "<br>")
-              : renderInlineMarkdown(block.content),
+            __html: renderedContent,
           }}
         />
       </div>
@@ -410,6 +498,10 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
   }
 
   if (block.type === "list") {
+    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
+      ? block.content.replace(/\n/g, "<br>")
+      : renderInlineMarkdown(block.content, baseFilePath)
+
     return (
       <div
         className={cn(
@@ -423,14 +515,14 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           ref={ref}
           contentEditable
           suppressContentEditableWarning
+          onClickCapture={onRenderedContentClick}
+          onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
           onKeyDown={(e) => onKeyDown(e, block)}
           className={cn("flex-1 outline-none", blockStyles[block.type])}
           dangerouslySetInnerHTML={{
-            __html: isEditing
-              ? block.content.replace(/\n/g, "<br>")
-              : renderInlineMarkdown(block.content),
+            __html: renderedContent,
           }}
         />
       </div>
@@ -438,6 +530,10 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
   }
 
   if (block.type === "code") {
+    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
+      ? block.content.replace(/\n/g, "<br>")
+      : renderInlineMarkdown(block.content, baseFilePath)
+
     return (
       <div
         className={cn(
@@ -455,6 +551,8 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           ref={ref}
           contentEditable
           suppressContentEditableWarning
+          onClickCapture={onRenderedContentClick}
+          onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
           onKeyDown={(e) => onKeyDown(e, block)}
@@ -463,13 +561,17 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
             block.language ? "rounded-b-lg rounded-t-none" : "rounded-lg"
           )}
         >
-          {block.content}
+          {isEditing && !isImageOnlyMarkdown(block.content) ? block.content : renderedContent}
         </div>
       </div>
     )
   }
 
   if (block.type === "table") {
+    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
+      ? renderPlainText(block.content)
+      : parseTableMarkdownToHtml(block.content)
+
     return (
       <div
         className={cn(
@@ -482,6 +584,8 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           ref={ref}
           contentEditable
           suppressContentEditableWarning
+          onClickCapture={onRenderedContentClick}
+          onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
           onKeyDown={(e) => onKeyDown(e, block)}
@@ -490,20 +594,24 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
             "rounded-lg"
           )}
           dangerouslySetInnerHTML={{
-            __html: isEditing
-              ? renderPlainText(block.content)
-              : parseTableMarkdownToHtml(block.content),
+            __html: renderedContent,
           }}
         />
       </div>
     )
   }
 
+  const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
+    ? block.content.replace(/\n/g, "<br>")
+    : renderInlineMarkdown(block.content, baseFilePath) || "&nbsp;"
+
   return (
     <div
       ref={ref}
       contentEditable
       suppressContentEditableWarning
+      onClickCapture={onRenderedContentClick}
+      onPaste={handlePaste}
       onBlur={handleBlur}
       onFocus={handleFocus}
       onKeyDown={(e) => onKeyDown(e, block)}
@@ -516,9 +624,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
       )}
       data-placeholder={!block.content ? "输入内容..." : undefined}
       dangerouslySetInnerHTML={{
-        __html: isEditing
-          ? block.content.replace(/\n/g, "<br>")
-          : renderInlineMarkdown(block.content) || "&nbsp;",
+        __html: renderedContent,
       }}
     />
   )
@@ -587,10 +693,50 @@ function setCaretPosition(element: HTMLElement, position: number) {
 }
 
 export function WysiwygEditor() {
-  const { content, setContent, editMode } = useEditorStore()
+  const { content, setContent, editMode, activeFileId, findNodeById } = useEditorStore()
   const [blocks, setBlocks] = useState<Block[]>(() => parseMarkdownToBlocks(content))
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
+  const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null)
   const isInternalUpdate = useRef(false)
+  const activeFilePath = activeFileId ? findNodeById(activeFileId)?.filePath ?? null : null
+
+  const handleRenderedContentClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement | null
+    if (!target) return
+
+    const imageElement = target.closest("img[src]") as HTMLImageElement | null
+    if (imageElement) {
+      const imageSource = imageElement.getAttribute("src")
+      if (!imageSource) return
+
+      event.preventDefault()
+
+      if (event.ctrlKey || event.metaKey) {
+        openRenderedTarget(imageSource)
+        return
+      }
+
+      setPreviewImage({
+        src: imageSource,
+        alt: imageElement.getAttribute("alt") || undefined,
+      })
+      return
+    }
+
+    const linkElement = target.closest("a[href]") as HTMLAnchorElement | null
+    if (!linkElement) return
+
+    const targetUrl = linkElement.getAttribute("href")
+    if (!targetUrl) return
+
+    event.preventDefault()
+
+    if (!event.ctrlKey && !event.metaKey) {
+      return
+    }
+
+    openRenderedTarget(targetUrl)
+  }, [])
 
   // Get current block content and selection
   const getActiveBlockContent = useCallback((): { block: Block; element: HTMLElement } | null => {
@@ -1054,11 +1200,25 @@ export function WysiwygEditor() {
                 onToggleTask={() => toggleTask(block.id)}
                 isActive={activeBlockId === block.id}
                 onClick={() => setActiveBlockId(block.id)}
+                onRenderedContentClick={handleRenderedContentClick}
+                baseFilePath={activeFilePath}
               />
             </div>
           ))}
         </div>
       </div>
+      {previewImage && (
+        <ImageLightbox
+          open={Boolean(previewImage)}
+          onOpenChange={(open) => {
+            if (!open) {
+              setPreviewImage(null)
+            }
+          }}
+          src={resolveImageSource(previewImage.src, activeFilePath)}
+          alt={previewImage.alt}
+        />
+      )}
     </div>
   )
 }

@@ -3,6 +3,7 @@ import { ChevronRight, File, Folder, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { FileNode, useEditorStore } from "@/lib/editor-store"
 import { Input } from "@/components/ui/input"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 function InlineCreateInput({
   type,
@@ -83,7 +84,7 @@ function FileTreeItem({
   node: FileNode
   depth?: number
 }) {
-  const { activeFileId, setActiveFile, toggleFolder, moveNode } = useEditorStore()
+  const { activeFileId, setActiveFile, toggleFolder, moveNode, saveFileById } = useEditorStore()
   const [isDragOver, setIsDragOver] = useState(false)
   const isActive = node.id === activeFileId
 
@@ -167,29 +168,52 @@ function FileTreeItem({
   }
 
   return (
-    <button
-      draggable
-      onDragStart={handleDragStart}
-      onClick={() => setActiveFile(node.id)}
-      className={cn(
-        "relative w-full flex items-center gap-1.5 px-2 py-1 pr-6 text-sm rounded-sm",
-        "hover:bg-sidebar-accent transition-colors cursor-grab active:cursor-grabbing",
-        isActive
-          ? "bg-sidebar-accent text-sidebar-foreground font-medium"
-          : "text-sidebar-foreground/80"
-      )}
-      style={{ paddingLeft: `${depth * 12 + 24}px` }}
-    >
-      <File className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span className="truncate">{node.name}</span>
+    <div className="relative">
+      <button
+        draggable
+        onDragStart={handleDragStart}
+        onClick={() => setActiveFile(node.id)}
+        className={cn(
+          "w-full flex items-center gap-1.5 px-2 py-1 pr-8 text-sm rounded-sm",
+          "hover:bg-sidebar-accent transition-colors cursor-grab active:cursor-grabbing",
+          isActive
+            ? "bg-sidebar-accent text-sidebar-foreground font-medium"
+            : "text-sidebar-foreground/80"
+        )}
+        style={{ paddingLeft: `${depth * 12 + 24}px` }}
+      >
+        <File className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate">{node.name}</span>
+      </button>
       {node.isDirty ? (
-        <span
-          className="pointer-events-none absolute right-2 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-amber-500"
-          aria-label="未保存"
-          title="未保存"
-        />
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  void saveFileById(node.id)
+                }}
+                className={cn(
+                  "absolute right-2 top-1/2 -translate-y-1/2",
+                  "flex h-5 w-5 items-center justify-center rounded-full",
+                  "text-amber-200 hover:bg-amber-400/15 hover:text-amber-400",
+                  "transition-colors"
+                )}
+                aria-label="点击保存"
+              >
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-300/70" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              <p>点击保存</p>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       ) : null}
-    </button>
+    </div>
   )
 }
 

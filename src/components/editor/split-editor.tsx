@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, type ClipboardEvent } from "react"
 import { useEditorStore } from "@/lib/editor-store"
 import { MarkdownRenderer } from "./markdown-renderer"
 import { Toolbar, FormatType } from "./toolbar"
 import { cn } from "@/lib/utils"
+import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/image-utils"
 
 export function SplitEditor() {
   const { content, setContent, splitViewMode } = useEditorStore()
@@ -187,6 +188,32 @@ export function SplitEditor() {
     })
   }, [setContent])
 
+  const handleTextareaPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const html = event.clipboardData.getData("text/html")
+    const text = event.clipboardData.getData("text/plain")
+    const imageSource = extractImageSourceFromClipboard(html, text)
+
+    if (!imageSource) {
+      return
+    }
+
+    event.preventDefault()
+
+    const textarea = event.currentTarget
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const markdownImage = `![${getImageAltFromSource(imageSource)}](${imageSource})`
+
+    const nextValue = textarea.value.slice(0, start) + markdownImage + textarea.value.slice(end)
+    setContent(nextValue)
+
+    requestAnimationFrame(() => {
+      textarea.focus()
+      const cursor = start + markdownImage.length
+      textarea.setSelectionRange(cursor, cursor)
+    })
+  }, [setContent])
+
   // Handle format button clicks
   const handleFormat = useCallback((type: FormatType) => {
     switch (type) {
@@ -364,6 +391,7 @@ export function SplitEditor() {
               data-editor-textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
+              onPaste={handleTextareaPaste}
               onScroll={handleEditorScroll}
               className={cn(
                 "flex-1 w-full resize-none p-6 bg-background text-foreground",
