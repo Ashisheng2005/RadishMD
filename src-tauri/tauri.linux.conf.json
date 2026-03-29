@@ -1,5 +1,16 @@
 {
   "bundle": {
-    "targets": ["deb", "rpm"]
+    "targets": ["deb", "rpm"],
+    "category": "Productivity",
+    "linux": {
+      "deb": {
+        "postInstallScript": "scripts/linux-refresh-desktop.sh",
+        "postRemoveScript": "scripts/linux-refresh-desktop.sh"
+      },
+      "rpm": {
+        "postInstallScript": "scripts/linux-refresh-desktop.sh",
+        "postRemoveScript": "scripts/linux-refresh-desktop.sh"
+      }
+    }
   }
 }
