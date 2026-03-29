@@ -14,6 +14,7 @@ import { UpdateDialog } from "./update-dialog"
 import { isTauriRuntime } from "@/lib/runtime"
 import {
   checkLatestRelease,
+  cancelDownload,
   chooseUpdateSavePath,
   downloadReleaseAsset,
   UPDATE_DOWNLOAD_PROGRESS_EVENT,
@@ -39,6 +40,8 @@ export function Editor() {
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
   const [downloadingAsset, setDownloadingAsset] = useState<string | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<UpdateDownloadProgress | null>(null)
+  const [cancellingDownload, setCancellingDownload] = useState(false)
+  const activeDownloadIdRef = useRef<string | null>(null)
   const hasAutoCheckedUpdate = useRef(false)
   const CHECK_UPDATE_MIN_LOADING_MS = 800
   const updateCheckState = checkingForUpdate
@@ -48,6 +51,22 @@ export function Editor() {
         ? "update-available"
         : "up-to-date"
       : "idle"
+
+  const formatErrorMessage = (error: unknown) => {
+    if (error instanceof Error) {
+      return error.message
+    }
+
+    if (typeof error === "string") {
+      return error
+    }
+
+    try {
+      return JSON.stringify(error)
+    } catch {
+      return String(error)
+    }
+  }
 
   const activeFilePath = useEditorStore((state) => {
     if (!state.activeFileId) {
@@ -108,23 +127,54 @@ export function Editor() {
 
   const handleDownloadAsset = async (asset: UpdateAsset) => {
     const savePath = await chooseUpdateSavePath(asset.name)
+    const downloadId = globalThis.crypto?.randomUUID?.() ?? `download-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 
     if (!savePath) {
       return
     }
 
+    activeDownloadIdRef.current = downloadId
     setDownloadingAsset(asset.name)
     setDownloadProgress(null)
+    setCancellingDownload(false)
 
     try {
-      await downloadReleaseAsset(asset, savePath)
+      await downloadReleaseAsset(asset, savePath, downloadId)
       toast.success(`更新包已下载到 ${savePath}`)
     } catch (error) {
       console.error("[RadishMD][update] download failed", error)
-      toast.error("下载更新失败")
+
+      if (formatErrorMessage(error).includes("download cancelled")) {
+        toast.info(`已取消下载 ${asset.name}`)
+      } else {
+        toast.error(`下载 ${asset.name} 失败：${formatErrorMessage(error)}`)
+      }
     } finally {
+      if (activeDownloadIdRef.current === downloadId) {
+        activeDownloadIdRef.current = null
+      }
+
       setDownloadingAsset(null)
       setDownloadProgress(null)
+      setCancellingDownload(false)
+    }
+  }
+
+  const handleCancelDownload = async () => {
+    const downloadId = activeDownloadIdRef.current
+
+    if (!downloadId || cancellingDownload) {
+      return
+    }
+
+    setCancellingDownload(true)
+
+    try {
+      await cancelDownload(downloadId)
+    } catch (error) {
+      console.error("[RadishMD][update] cancel failed", error)
+      toast.error("取消下载失败")
+      setCancellingDownload(false)
     }
   }
 
@@ -301,6 +351,10 @@ export function Editor() {
     let cancelled = false
 
     void listen<UpdateDownloadProgress>(UPDATE_DOWNLOAD_PROGRESS_EVENT, (event) => {
+      if (event.payload.download_id !== activeDownloadIdRef.current) {
+        return
+      }
+
       setDownloadProgress(event.payload)
     }).then((dispose) => {
       if (cancelled) {
@@ -342,9 +396,11 @@ export function Editor() {
         updateInfo={updateInfo}
         downloadingAsset={downloadingAsset}
         downloadProgress={downloadProgress}
+        cancellingDownload={cancellingDownload}
         onOpenChange={setUpdateDialogOpen}
         onCheckAgain={() => void checkForUpdates(true)}
         onDownloadAsset={handleDownloadAsset}
+        onCancelDownload={() => void handleCancelDownload()}
       />
     </div>
   )

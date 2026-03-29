@@ -22,6 +22,7 @@ export interface UpdateCheckResult {
 }
 
 export interface UpdateDownloadProgress {
+  download_id: string
   asset_name: string
   downloaded_bytes: number
   total_bytes: number | null
@@ -40,10 +41,15 @@ export async function chooseUpdateSavePath(defaultName: string): Promise<string 
   return save({ defaultPath: defaultName })
 }
 
-export async function downloadReleaseAsset(asset: UpdateAsset, savePath: string): Promise<void> {
+export async function downloadReleaseAsset(asset: UpdateAsset, savePath: string, downloadId: string): Promise<void> {
   await invoke("download_release_asset", {
+    downloadId,
     assetName: asset.name,
     assetUrl: asset.download_url,
     savePath,
   })
+}
+
+export async function cancelDownload(downloadId: string): Promise<void> {
+  await invoke("cancel_download", { downloadId })
 }

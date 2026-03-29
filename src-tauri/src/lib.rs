@@ -1,7 +1,8 @@
 use std::fs;
 use std::io::{Read, Write};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc, LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher};
@@ -52,6 +53,7 @@ struct UpdateCheckResult {
 
 #[derive(Clone, Serialize)]
 struct DownloadProgress {
+    download_id: String,
     asset_name: String,
     downloaded_bytes: u64,
     total_bytes: Option<u64>,
@@ -67,6 +69,37 @@ struct FileSnapshot {
 static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> = LazyLock::new(|| {
     Mutex::new(None)
 });
+
+#[derive(Default)]
+struct DownloadCancellationRegistry {
+    tokens: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+impl DownloadCancellationRegistry {
+    fn register(&self, download_id: &str) -> Result<Arc<AtomicBool>, String> {
+        let token = Arc::new(AtomicBool::new(false));
+        let mut tokens = self.tokens.lock().map_err(|_| "Failed to lock download registry".to_string())?;
+        tokens.insert(download_id.to_string(), token.clone());
+        Ok(token)
+    }
+
+    fn cancel(&self, download_id: &str) -> Result<bool, String> {
+        let tokens = self.tokens.lock().map_err(|_| "Failed to lock download registry".to_string())?;
+
+        if let Some(token) = tokens.get(download_id) {
+            token.store(true, Ordering::SeqCst);
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    fn remove(&self, download_id: &str) {
+        if let Ok(mut tokens) = self.tokens.lock() {
+            tokens.remove(download_id);
+        }
+    }
+}
 
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
@@ -247,67 +280,124 @@ fn check_latest_release(app: tauri::AppHandle) -> Result<UpdateCheckResult, Stri
 }
 
 #[tauri::command]
-fn download_release_asset(
+async fn download_release_asset(
     app: tauri::AppHandle,
+    download_id: String,
     asset_name: String,
     asset_url: String,
     save_path: String,
+    cancellation_registry: tauri::State<'_, DownloadCancellationRegistry>,
 ) -> Result<(), String> {
-    let client = build_github_client(&app)?;
-    let mut response = client
-        .get(asset_url)
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?;
+    let cancellation_token = cancellation_registry.register(&download_id)?;
+    let download_id_for_cleanup = download_id.clone();
 
-    let total_bytes = response.content_length();
-    let mut downloaded_bytes = 0u64;
-    let path = PathBuf::from(&save_path);
+    let download_result = tauri::async_runtime::spawn_blocking(move || {
+        download_release_asset_blocking(
+            &app,
+            &download_id,
+            &asset_name,
+            &asset_url,
+            &save_path,
+            &cancellation_token,
+        )
+    })
+    .await;
 
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
+    cancellation_registry.remove(&download_id_for_cleanup);
 
-    let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
-    let mut buffer = [0u8; 16 * 1024];
+    download_result.map_err(|e| e.to_string())?
+}
 
-    loop {
-        let bytes_read = response.read(&mut buffer).map_err(|e| e.to_string())?;
+fn download_release_asset_blocking(
+    app: &tauri::AppHandle,
+    download_id: &str,
+    asset_name: &str,
+    asset_url: &str,
+    save_path: &str,
+    cancellation_token: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    let path = PathBuf::from(save_path);
+    let result = (|| -> Result<(), String> {
+        let client = build_github_client(app)?;
+        let mut response = client
+            .get(asset_url)
+            .send()
+            .map_err(|e| e.to_string())?
+            .error_for_status()
+            .map_err(|e| e.to_string())?;
 
-        if bytes_read == 0 {
-            break;
+        let total_bytes = response.content_length();
+        let mut downloaded_bytes = 0u64;
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
 
-        file.write_all(&buffer[..bytes_read]).map_err(|e| e.to_string())?;
-        downloaded_bytes += bytes_read as u64;
+        let mut file = fs::File::create(&path).map_err(|e| e.to_string())?;
+        let mut buffer = [0u8; 16 * 1024];
 
-        let progress = total_bytes.map(|total| downloaded_bytes as f64 / total as f64);
+        loop {
+            if cancellation_token.load(Ordering::SeqCst) {
+                return Err("download cancelled".to_string());
+            }
+
+            let bytes_read = response.read(&mut buffer).map_err(|e| e.to_string())?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            if cancellation_token.load(Ordering::SeqCst) {
+                return Err("download cancelled".to_string());
+            }
+
+            file.write_all(&buffer[..bytes_read]).map_err(|e| e.to_string())?;
+            downloaded_bytes += bytes_read as u64;
+
+            let progress = total_bytes.map(|total| downloaded_bytes as f64 / total as f64);
+
+            let _ = app.emit(
+                UPDATE_DOWNLOAD_PROGRESS_EVENT,
+                DownloadProgress {
+                    download_id: download_id.to_string(),
+                    asset_name: asset_name.to_string(),
+                    downloaded_bytes,
+                    total_bytes,
+                    progress,
+                },
+            );
+        }
+
+        file.flush().map_err(|e| e.to_string())?;
 
         let _ = app.emit(
             UPDATE_DOWNLOAD_PROGRESS_EVENT,
             DownloadProgress {
-                asset_name: asset_name.clone(),
+                download_id: download_id.to_string(),
+                asset_name: asset_name.to_string(),
                 downloaded_bytes,
                 total_bytes,
-                progress,
+                progress: Some(1.0),
             },
         );
+
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&path);
     }
 
-    file.flush().map_err(|e| e.to_string())?;
+    result
+}
 
-    let _ = app.emit(
-        UPDATE_DOWNLOAD_PROGRESS_EVENT,
-        DownloadProgress {
-            asset_name,
-            downloaded_bytes,
-            total_bytes,
-            progress: Some(1.0),
-        },
-    );
-
-    Ok(())
+#[tauri::command]
+fn cancel_download(download_id: String, cancellation_registry: tauri::State<'_, DownloadCancellationRegistry>) -> Result<(), String> {
+    if cancellation_registry.cancel(&download_id)? {
+        Ok(())
+    } else {
+        Err("download not found".to_string())
+    }
 }
 
 #[tauri::command]
@@ -358,6 +448,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_cli::init())
+        .manage(DownloadCancellationRegistry::default())
         .invoke_handler(tauri::generate_handler![
             read_file,
             read_file_snapshot,
@@ -367,6 +458,7 @@ pub fn run() {
             get_app_version,
             check_latest_release,
             download_release_asset,
+            cancel_download,
             watch_file_changes,
             clear_file_watcher
         ])

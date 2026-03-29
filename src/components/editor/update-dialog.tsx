@@ -3,10 +3,11 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Download, ExternalLink, RefreshCw } from "lucide-react"
+import { Download, ExternalLink, RefreshCw, CircleSlash2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
 import { Spinner } from "@/components/ui/spinner"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type { UpdateAsset, UpdateCheckResult, UpdateDownloadProgress } from "@/lib/update"
 
 interface UpdateDialogProps {
@@ -15,9 +16,11 @@ interface UpdateDialogProps {
   updateInfo: UpdateCheckResult | null
   downloadingAsset: string | null
   downloadProgress: UpdateDownloadProgress | null
+  cancellingDownload: boolean
   onOpenChange: (open: boolean) => void
   onCheckAgain: () => void
   onDownloadAsset: (asset: UpdateAsset) => Promise<void>
+  onCancelDownload: () => void
 }
 
 function formatBytes(bytes: number) {
@@ -43,14 +46,22 @@ export function UpdateDialog({
   updateInfo,
   downloadingAsset,
   downloadProgress,
+  cancellingDownload,
   onOpenChange,
   onCheckAgain,
   onDownloadAsset,
+  onCancelDownload,
 }: UpdateDialogProps) {
   const releaseNotes = updateInfo?.release_notes?.trim() || "暂无 release note。"
   const hasAssets = Boolean(updateInfo?.assets.length)
   const currentVersion = updateInfo?.current_version || "-"
   const latestVersion = updateInfo?.latest_version || "-"
+  const activeDownloadAsset = updateInfo?.assets.find((asset) => asset.name === downloadingAsset) ?? null
+  const activeDownloadText = activeDownloadAsset
+    ? downloadProgress
+      ? `${downloadProgress.asset_name} · ${formatBytes(downloadProgress.downloaded_bytes)} / ${downloadProgress.total_bytes ? formatBytes(downloadProgress.total_bytes) : "未知总大小"}`
+      : `${activeDownloadAsset.name} · 准备下载`
+    : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -130,49 +141,84 @@ export function UpdateDialog({
               打开 Release
             </Button>
           </div>
-          {hasAssets ? (
-            <div className="grid gap-2">
-              {updateInfo?.assets.map((asset) => {
-                const isDownloading = downloadingAsset === asset.name
-                const progress = isDownloading ? downloadProgress?.progress : null
-                const downloadedBytes = isDownloading ? downloadProgress?.downloaded_bytes ?? 0 : 0
-                const totalBytes = isDownloading ? downloadProgress?.total_bytes ?? asset.size : asset.size
-
-                return (
-                  <div
-                    key={asset.name}
-                    className={cn(
-                      "rounded-lg border bg-background p-3",
-                      asset.is_preferred && "border-primary/40 bg-primary/5",
-                    )}
-                  >
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <div className="truncate font-medium">{asset.name}</div>
-                          {asset.is_preferred && <Badge>推荐</Badge>}
-                        </div>
-                        <div className="text-xs text-muted-foreground">{formatBytes(asset.size)}</div>
-                      </div>
-                      <Button type="button" size="sm" onClick={() => void onDownloadAsset(asset)} disabled={Boolean(downloadingAsset)}>
-                        {isDownloading ? <Spinner className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
-                        {isDownloading ? "下载中" : "下载"}
+          {activeDownloadText && (
+            <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm text-primary">
+              <div className="flex items-center justify-between gap-3">
+                <div className="font-medium">正在下载</div>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 border border-primary/20 text-primary/80 hover:bg-primary/10"
+                        onClick={onCancelDownload}
+                        disabled={cancellingDownload}
+                        aria-label="取消下载"
+                      >
+                        {cancellingDownload ? <Spinner className="h-4 w-4" /> : <CircleSlash2 className="h-4 w-4" aria-hidden="true" />}
                       </Button>
-                    </div>
-                    {isDownloading && (
-                      <div className="mt-3 space-y-2">
-                        <Progress value={Math.round((progress ?? 0) * 100)} />
-                        <div className="text-xs text-muted-foreground">
-                          {progress == null
-                            ? `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`
-                            : `${Math.round(progress * 100)}% (${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)})`}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                    </TooltipTrigger>
+                    <TooltipContent>取消下载</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+              <div className="mt-1 text-xs opacity-80">{activeDownloadText}</div>
             </div>
+          )}
+          {hasAssets ? (
+            <ScrollArea className="max-h-64 rounded-lg border bg-muted/20">
+              <div className="grid gap-2 p-2">
+                {updateInfo?.assets.map((asset) => {
+                  const isDownloading = downloadingAsset === asset.name
+                  const progress = isDownloading ? downloadProgress?.progress : null
+                  const downloadedBytes = isDownloading ? downloadProgress?.downloaded_bytes ?? 0 : 0
+                  const totalBytes = isDownloading ? downloadProgress?.total_bytes ?? asset.size : asset.size
+
+                  return (
+                    <div
+                      key={asset.name}
+                      className={cn(
+                        "rounded-lg border bg-background p-3",
+                        asset.is_preferred && "border-primary/40 bg-primary/5",
+                        isDownloading && "border-primary/50 bg-primary/5",
+                      )}
+                    >
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <div className="truncate font-medium">{asset.name}</div>
+                            {asset.is_preferred && <Badge>推荐</Badge>}
+                            {isDownloading && <Badge variant="secondary">下载中</Badge>}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {formatBytes(asset.size)}
+                            {isDownloading && (
+                              <span className="ml-2">已下载 {formatBytes(downloadedBytes)}</span>
+                            )}
+                          </div>
+                        </div>
+                        <Button type="button" size="sm" onClick={() => void onDownloadAsset(asset)} disabled={Boolean(downloadingAsset)}>
+                          {isDownloading ? <Spinner className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
+                          {isDownloading ? "下载中" : "下载"}
+                        </Button>
+                      </div>
+                      {isDownloading && (
+                        <div className="mt-3 space-y-2">
+                          <Progress value={Math.round((progress ?? 0) * 100)} />
+                          <div className="text-xs text-muted-foreground">
+                            {progress == null
+                              ? `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`
+                              : `${Math.round(progress * 100)}% (${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)})`}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </ScrollArea>
           ) : (
             <div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
               没有可下载的安装包资产。
