@@ -1,6 +1,8 @@
-import { useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
+import { toast } from "sonner"
 import { useEditorStore } from "@/lib/editor-store"
 import { TitleBar } from "./title-bar"
 import { Sidebar } from "./sidebar"
@@ -8,6 +10,17 @@ import { EditorArea } from "./editor-area"
 import { Outline } from "./outline"
 import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
+import { UpdateDialog } from "./update-dialog"
+import { isTauriRuntime } from "@/lib/runtime"
+import {
+  checkLatestRelease,
+  chooseUpdateSavePath,
+  downloadReleaseAsset,
+  UPDATE_DOWNLOAD_PROGRESS_EVENT,
+  type UpdateAsset,
+  type UpdateCheckResult,
+  type UpdateDownloadProgress,
+} from "@/lib/update"
 
 export function Editor() {
   const {
@@ -21,6 +34,20 @@ export function Editor() {
     toggleSearch,
     closeSearch,
   } = useEditorStore()
+  const [updateInfo, setUpdateInfo] = useState<UpdateCheckResult | null>(null)
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false)
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false)
+  const [downloadingAsset, setDownloadingAsset] = useState<string | null>(null)
+  const [downloadProgress, setDownloadProgress] = useState<UpdateDownloadProgress | null>(null)
+  const hasAutoCheckedUpdate = useRef(false)
+  const CHECK_UPDATE_MIN_LOADING_MS = 800
+  const updateCheckState = checkingForUpdate
+    ? "checking"
+    : updateInfo
+      ? updateInfo.has_update
+        ? "update-available"
+        : "up-to-date"
+      : "idle"
 
   const activeFilePath = useEditorStore((state) => {
     if (!state.activeFileId) {
@@ -40,6 +67,66 @@ export function Editor() {
       console.log("[RadishMD][Editor] unmount")
     }
   }, [])
+
+  const checkForUpdates = async (showToastOnSuccess: boolean) => {
+    if (checkingForUpdate) {
+      return
+    }
+
+    const startedAt = Date.now()
+    flushSync(() => {
+      setCheckingForUpdate(true)
+    })
+
+    try {
+      const result = await checkLatestRelease()
+      setUpdateInfo(result)
+
+      if (result.has_update) {
+        setUpdateDialogOpen(true)
+        return
+      }
+
+      if (showToastOnSuccess) {
+        toast.success("当前已是最新版本")
+      }
+    } catch (error) {
+      console.error("[RadishMD][update] check failed", error)
+
+      if (showToastOnSuccess) {
+        toast.error("检查更新失败")
+      }
+    } finally {
+      const elapsed = Date.now() - startedAt
+      if (elapsed < CHECK_UPDATE_MIN_LOADING_MS) {
+        await new Promise((resolve) => window.setTimeout(resolve, CHECK_UPDATE_MIN_LOADING_MS - elapsed))
+      }
+
+      setCheckingForUpdate(false)
+    }
+  }
+
+  const handleDownloadAsset = async (asset: UpdateAsset) => {
+    const savePath = await chooseUpdateSavePath(asset.name)
+
+    if (!savePath) {
+      return
+    }
+
+    setDownloadingAsset(asset.name)
+    setDownloadProgress(null)
+
+    try {
+      await downloadReleaseAsset(asset, savePath)
+      toast.success(`更新包已下载到 ${savePath}`)
+    } catch (error) {
+      console.error("[RadishMD][update] download failed", error)
+      toast.error("下载更新失败")
+    } finally {
+      setDownloadingAsset(null)
+      setDownloadProgress(null)
+    }
+  }
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -124,6 +211,10 @@ export function Editor() {
 
   useEffect(() => {
     // Check for file opened via file association on app startup
+    if (!isTauriRuntime()) {
+      return
+    }
+
     invoke<string | null>("get_cli_file_path").then((filePath) => {
       if (filePath) {
         openFileFromPath(filePath)
@@ -132,6 +223,19 @@ export function Editor() {
   }, [openFileFromPath])
 
   useEffect(() => {
+    if (import.meta.env.DEV || hasAutoCheckedUpdate.current) {
+      return
+    }
+
+    hasAutoCheckedUpdate.current = true
+    void checkForUpdates(false)
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return
+    }
+
     const syncFileWatcher = async () => {
       if (activeFilePath) {
         await invoke("watch_file_changes", { filePath: activeFilePath })
@@ -149,6 +253,10 @@ export function Editor() {
   }, [activeFilePath])
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      return
+    }
+
     let unlisten: (() => void) | null = null
     let cancelled = false
 
@@ -184,6 +292,31 @@ export function Editor() {
     }
   }, [checkActiveFileForExternalChanges])
 
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return
+    }
+
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+
+    void listen<UpdateDownloadProgress>(UPDATE_DOWNLOAD_PROGRESS_EVENT, (event) => {
+      setDownloadProgress(event.payload)
+    }).then((dispose) => {
+      if (cancelled) {
+        dispose()
+        return
+      }
+
+      unlisten = dispose
+    })
+
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
+
   return (
     <div
       className={cn(
@@ -191,13 +324,28 @@ export function Editor() {
         "bg-background text-foreground"
       )}
     >
-      <TitleBar />
+      <TitleBar
+        checkingForUpdate={checkingForUpdate}
+        latestVersion={updateInfo?.latest_version ?? null}
+        updateCheckState={updateCheckState}
+        onCheckForUpdates={() => void checkForUpdates(true)}
+      />
       <div className="flex-1 flex overflow-hidden">
         <Sidebar />
         <EditorArea />
         <Outline />
       </div>
       <StatusBar />
+      <UpdateDialog
+        open={updateDialogOpen}
+        checking={checkingForUpdate}
+        updateInfo={updateInfo}
+        downloadingAsset={downloadingAsset}
+        downloadProgress={downloadProgress}
+        onOpenChange={setUpdateDialogOpen}
+        onCheckAgain={() => void checkForUpdates(true)}
+        onDownloadAsset={handleDownloadAsset}
+      />
     </div>
   )
 }

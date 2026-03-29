@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react"
-import { openPath, openUrl } from "@tauri-apps/plugin-opener"
 import { ImageLightbox } from "./image-lightbox"
 import { buildImageTag, parseImageReference } from "@/lib/image-utils"
 import { useEditorStore } from "@/lib/editor-store"
 import { cn } from "@/lib/utils"
+import { openExternalTarget } from "@/lib/runtime"
 
 interface MarkdownRendererProps {
   content: string
@@ -219,15 +219,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   }, [content, activeFilePath])
 
   function openRenderedTarget(target: string) {
-    const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(target)
-    const isProbablyUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(target) && !isWindowsPath
-
-    if (isProbablyUrl) {
-      void openUrl(target)
-      return
-    }
-
-    void openPath(target)
+    void openExternalTarget(target)
   }
 
   const handleClickCapture = (event: React.MouseEvent<HTMLDivElement>) => {

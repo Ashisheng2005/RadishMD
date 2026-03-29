@@ -43,6 +43,7 @@ interface EditorState {
   toggleOutline: () => void
   toggleTheme: () => void
   toggleEditMode: () => void
+  setEditMode: (mode: "split" | "wysiwyg") => void
   setSplitViewMode: (mode: "split" | "editor" | "render") => void
   toggleFolder: (id: string) => void
   updateCounts: (content: string) => void
@@ -259,6 +260,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     })),
   toggleEditMode: () =>
     set((state) => ({ editMode: state.editMode === "split" ? "wysiwyg" : "split" })),
+
+  setEditMode: (mode: "split" | "wysiwyg") => set({ editMode: mode }),
 
   setSplitViewMode: (mode: "split" | "editor" | "render") => set({ splitViewMode: mode }),
 

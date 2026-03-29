@@ -1,11 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "radishmd",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "identifier": "radishtools.radishmd.fun",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "node scripts/start-tauri-dev.mjs",
+    "devUrl": "http://localhost:1421",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -38,7 +38,9 @@
     ],
     "fileAssociations": [
       {
-        "ext": ["md"],
+        "ext": [
+          "md"
+        ],
         "name": "Markdown Document",
         "description": "Markdown file opened by RadishMD",
         "mimeType": "text/markdown",

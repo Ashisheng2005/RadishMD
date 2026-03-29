@@ -1,10 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { openPath, openUrl } from "@tauri-apps/plugin-opener"
 import { useEditorStore } from "@/lib/editor-store"
 import { buildImageTag, extractImageSourceFromClipboard, getImageAltFromSource, isStandaloneImageReference, parseImageReference, resolveImageSource } from "@/lib/image-utils"
 import { cn } from "@/lib/utils"
+import { openExternalTarget } from "@/lib/runtime"
 import { ImageLightbox } from "./image-lightbox"
 import { FormatType, Toolbar } from "./toolbar"
 
@@ -333,15 +333,7 @@ function isImageOnlyMarkdown(text: string) {
 }
 
 function openRenderedTarget(target: string) {
-  const isWindowsPath = /^[a-zA-Z]:[\\/]/.test(target)
-  const isProbablyUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(target) && !isWindowsPath
-
-  if (isProbablyUrl) {
-    void openUrl(target)
-    return
-  }
-
-  void openPath(target)
+  void openExternalTarget(target)
 }
 
 interface BlockEditorProps {

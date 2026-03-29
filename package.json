@@ -1,10 +1,17 @@
 {
   "name": "radishmd",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "version:sync": "node scripts/sync-version.mjs",
+    "version:check": "node scripts/sync-version.mjs --check",
+    "predev": "npm run version:sync",
     "dev": "vite",
+    "prebuild": "npm run version:sync",
+    "prepreview": "npm run version:sync",
+    "pretauri": "npm run version:sync",
+    "dev:tauri": "vite --port 1421 --strictPort",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri"
