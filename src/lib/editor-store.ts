@@ -21,6 +21,31 @@ interface FileSnapshot {
   modified: number | null
 }
 
+export function normalizeFilePath(filePath: string) {
+  const trimmedPath = filePath.trim()
+
+  if (!trimmedPath || !trimmedPath.startsWith("file://")) {
+    return trimmedPath
+  }
+
+  try {
+    const parsedUrl = new URL(trimmedPath)
+    const decodedPath = decodeURIComponent(parsedUrl.pathname)
+
+    if (parsedUrl.host && parsedUrl.host !== "localhost") {
+      return `//${parsedUrl.host}${decodedPath}`
+    }
+
+    if (/^\/[A-Za-z]:\//.test(decodedPath)) {
+      return decodedPath.slice(1)
+    }
+
+    return decodedPath
+  } catch {
+    return trimmedPath
+  }
+}
+
 interface EditorState {
   files: FileNode[]
   activeFileId: string | null
@@ -81,6 +106,31 @@ function debugEditorLog(label: string, details?: Record<string, unknown>) {
 }
 
 let lastExternalChangeWarningKey: string | null = null
+const externalChangeSuppressionByPath = new Map<string, number>()
+const EXTERNAL_CHANGE_SUPPRESSION_WINDOW_MS = 1500
+
+function suppressExternalChangeChecks(filePath: string) {
+  externalChangeSuppressionByPath.set(
+    normalizeFilePath(filePath),
+    Date.now() + EXTERNAL_CHANGE_SUPPRESSION_WINDOW_MS,
+  )
+}
+
+function isExternalChangeSuppressed(filePath: string) {
+  const normalizedFilePath = normalizeFilePath(filePath)
+  const suppressedUntil = externalChangeSuppressionByPath.get(normalizedFilePath)
+
+  if (!suppressedUntil) {
+    return false
+  }
+
+  if (suppressedUntil < Date.now()) {
+    externalChangeSuppressionByPath.delete(normalizedFilePath)
+    return false
+  }
+
+  return true
+}
 
 function warnExternalChangeOnce(file: FileNode, modified: number | null) {
   const warningKey = `${file.id}:${modified ?? "unknown"}`
@@ -108,7 +158,7 @@ function summarizeFiles(files: FileNode[]) {
 }
 
 export async function readFileSnapshot(filePath: string): Promise<FileSnapshot> {
-  const snapshot = await invoke<FileSnapshot>("read_file_snapshot", { path: filePath })
+  const snapshot = await invoke<FileSnapshot>("read_file_snapshot", { path: normalizeFilePath(filePath) })
   return snapshot
 }
 
@@ -314,9 +364,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   findNodeByPath: (filePath: string) => {
+    const normalizedFilePath = normalizeFilePath(filePath)
+
     const findInNodes = (nodes: FileNode[]): FileNode | null => {
       for (const node of nodes) {
-        if (node.type === "file" && node.filePath === filePath) return node
+        if (node.type === "file" && node.filePath === normalizedFilePath) return node
         if (node.children) {
           const found = findInNodes(node.children)
           if (found) return found
@@ -397,6 +449,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const file = get().findNodeById(activeFileId)
     if (!file || file.type !== "file" || !file.filePath) return
+
+    if (isExternalChangeSuppressed(file.filePath)) {
+      debugEditorLog("checkActiveFileForExternalChanges:suppressed", {
+        id: activeFileId,
+        filePath: file.filePath,
+      })
+      return
+    }
 
     try {
       const snapshot = await readFileSnapshot(file.filePath)
@@ -568,6 +628,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     // Direct save
     try {
+      suppressExternalChangeChecks(file.filePath)
       debugEditorLog("saveFile:start", {
         activeFileId,
         filePath: file.filePath,
@@ -617,6 +678,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (!selected) return
 
     try {
+      suppressExternalChangeChecks(selected)
       debugEditorLog("saveFileAs:start", {
         activeFileId,
         selected,
@@ -671,6 +733,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (!selected) return
 
       try {
+        suppressExternalChangeChecks(selected)
         debugEditorLog("saveFileById:save-as:start", {
           id,
           selected,
@@ -713,6 +776,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     try {
+      suppressExternalChangeChecks(file.filePath)
       debugEditorLog("saveFileById:start", {
         id,
         filePath: file.filePath,
@@ -751,14 +815,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   openFileFromPath: async (filePath: string) => {
     try {
-      debugEditorLog("openFileFromPath:start", { filePath, files: summarizeFiles(get().files) })
-      const snapshot = await readFileSnapshot(filePath)
-      const fileName = await invoke<string>("get_file_name", { filePath })
-      const existingFile = get().findNodeByPath(filePath)
+      const normalizedFilePath = normalizeFilePath(filePath)
+      debugEditorLog("openFileFromPath:start", { filePath: normalizedFilePath, files: summarizeFiles(get().files) })
+      const snapshot = await readFileSnapshot(normalizedFilePath)
+      const fileName = await invoke<string>("get_file_name", { filePath: normalizedFilePath })
+      const existingFile = get().findNodeByPath(normalizedFilePath)
 
       if (existingFile) {
         debugEditorLog("openFileFromPath:existing-file", {
-          filePath,
+          filePath: normalizedFilePath,
           fileName,
           existingFileId: existingFile.id,
         })
@@ -774,7 +839,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         name: fileName,
         type: "file",
         content: snapshot.content,
-        filePath,
+        filePath: normalizedFilePath,
         sourceModified: snapshot.modified,
         isDirty: false,
         hasExternalChanges: false,
@@ -785,7 +850,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       get().updateCounts(snapshot.content)
 
       debugEditorLog("openFileFromPath:new-file", {
-        filePath,
+        filePath: normalizedFilePath,
         fileName,
         newFileId: newFile.id,
         files: summarizeFiles(get().files),

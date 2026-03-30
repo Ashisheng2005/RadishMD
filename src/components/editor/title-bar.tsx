@@ -11,11 +11,11 @@ import {
   Search,
   FileText,
 } from "lucide-react"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useDeferredValue, useEffect, useRef, useState, useTransition } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditorStore } from "@/lib/editor-store"
-import { searchLoadedFiles, type FileSearchResult } from "@/lib/search-utils"
+import { type FileSearchResult } from "@/lib/search-utils"
 import {
   Tooltip,
   TooltipContent,
@@ -143,19 +143,125 @@ export function TitleBar({
   } = useEditorStore()
 
   const [searchQuery, setSearchQuery] = useState("")
+  const deferredSearchQuery = useDeferredValue(searchQuery)
+  const [searchResults, setSearchResults] = useState<FileSearchResult[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const [isSearchPending, startSearchTransition] = useTransition()
+  const [isSearchWorkerReady, setIsSearchWorkerReady] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchWorkerRef = useRef<Worker | null>(null)
+  const searchRequestIdRef = useRef(0)
 
   const activeFile = activeFileId ? findNodeById(activeFileId) : null
-  const searchResults = useMemo(
-    () => searchLoadedFiles(files, searchQuery, activeFileId),
-    [files, searchQuery, activeFileId]
+
+  const runSearch = useCallback(
+    (query: string) => {
+      const normalizedQuery = query.trim()
+
+      if (!normalizedQuery) {
+        setIsSearching(false)
+        startSearchTransition(() => {
+          setSearchResults([])
+        })
+        setSelectedIndex(0)
+        return
+      }
+
+      const worker = searchWorkerRef.current
+
+      if (!worker || !isSearchWorkerReady) {
+        setIsSearching(true)
+        return
+      }
+
+      const requestId = searchRequestIdRef.current + 1
+      searchRequestIdRef.current = requestId
+      setIsSearching(true)
+
+      worker.postMessage({
+        type: "search",
+        requestId,
+        query: normalizedQuery,
+        activeFileId,
+      })
+    },
+    [activeFileId, isSearchWorkerReady, startSearchTransition]
   )
 
   useEffect(() => {
     setSelectedIndex(0)
   }, [isSearchOpen, searchQuery])
+
+  useEffect(() => {
+    if (!isSearchOpen) {
+      return
+    }
+
+    if (typeof Worker === "undefined") {
+      return
+    }
+
+    const worker = new Worker(new URL("@/workers/search-worker.ts", import.meta.url), {
+      type: "module",
+    })
+
+    searchWorkerRef.current = worker
+
+    worker.onmessage = (event: MessageEvent<{ type: string; requestId?: number; results?: FileSearchResult[] }>) => {
+      const message = event.data
+
+      if (message.type === "ready") {
+        setIsSearchWorkerReady(true)
+        return
+      }
+
+      if (message.type === "results" && typeof message.requestId === "number") {
+        if (message.requestId !== searchRequestIdRef.current) {
+          return
+        }
+
+        startSearchTransition(() => {
+          setSearchResults(message.results || [])
+          setIsSearching(false)
+        })
+      }
+    }
+
+    worker.onerror = (error) => {
+      console.error("[RadishMD][search] worker error", error)
+    }
+
+    return () => {
+      searchWorkerRef.current = null
+      setIsSearchWorkerReady(false)
+      setIsSearching(false)
+      worker.terminate()
+    }
+  }, [isSearchOpen])
+
+  useEffect(() => {
+    const worker = searchWorkerRef.current
+
+    if (!worker || !isSearchWorkerReady) {
+      return
+    }
+
+    worker.postMessage({
+      type: "set-files",
+      files,
+    })
+    runSearch(deferredSearchQuery)
+  }, [deferredSearchQuery, files, isSearchWorkerReady, runSearch])
+
+  useEffect(() => {
+    if (!isSearchWorkerReady) {
+      return
+    }
+
+    runSearch(deferredSearchQuery)
+  }, [activeFileId, deferredSearchQuery, isSearchWorkerReady, runSearch])
 
   const displayLabel = activeFile?.filePath || activeFile?.name || "RadishMD"
   const updateStatusText =
@@ -200,8 +306,12 @@ export function TitleBar({
   const clearAndCloseSearch = useCallback(() => {
     setSearchQuery("")
     setSelectedIndex(0)
+    setIsSearching(false)
+    startSearchTransition(() => {
+      setSearchResults([])
+    })
     closeSearch()
-  }, [closeSearch])
+  }, [closeSearch, startSearchTransition])
 
   const handleSearchInputKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -334,6 +444,10 @@ export function TitleBar({
                   {searchQuery.trim() === "" ? (
                     <div className="px-3 py-6 text-center text-sm text-muted-foreground">
                       输入关键词，搜索当前已加载的文件
+                    </div>
+                  ) : isSearching || isSearchPending ? (
+                    <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                      正在搜索...
                     </div>
                   ) : searchResults.length === 0 ? (
                     <div className="px-3 py-6 text-center text-sm text-muted-foreground">

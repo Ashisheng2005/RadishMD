@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog"
-import { readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
+import { normalizeFilePath, readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
 
 const textFileExtensions = [
   "md",
@@ -35,6 +35,7 @@ function shouldUseEditorOnlyMode(filePath: string) {
 }
 
 export async function importFiles(): Promise<void> {
+  console.log("[RadishMD][import] open dialog start")
   const selected = await open({
     multiple: true,
     filters: [
@@ -43,9 +44,13 @@ export async function importFiles(): Promise<void> {
       { name: "JSON", extensions: ["json", "jsonc"] },
     ],
   })
-  if (!selected) return
+  if (!selected) {
+    console.log("[RadishMD][import] cancelled")
+    return
+  }
 
   const selectedFiles = Array.isArray(selected) ? selected : [selected]
+  console.log("[RadishMD][import] selected", { selectedFiles })
   const store = useEditorStore.getState()
   const newFiles: FileNode[] = []
   const seenPaths = new Set<string>()
@@ -53,32 +58,49 @@ export async function importFiles(): Promise<void> {
   let newActivationTargetId: string | null = null
 
   for (const filePath of selectedFiles) {
-    if (seenPaths.has(filePath)) {
+    const normalizedFilePath = normalizeFilePath(filePath)
+
+    console.log("[RadishMD][import] candidate", {
+      filePath,
+      normalizedFilePath,
+    })
+
+    if (seenPaths.has(normalizedFilePath)) {
+      console.log("[RadishMD][import] duplicate skipped", { normalizedFilePath })
       continue
     }
 
-    const existingFile = store.findNodeByPath(filePath)
+    const existingFile = store.findNodeByPath(normalizedFilePath)
     if (existingFile) {
+      console.log("[RadishMD][import] existing file reused", {
+        normalizedFilePath,
+        existingFileId: existingFile.id,
+      })
       if (!duplicateActivationTargetId) {
         duplicateActivationTargetId = existingFile.id
       }
-      seenPaths.add(filePath)
+      seenPaths.add(normalizedFilePath)
       continue
     }
 
-    const { content, modified } = await readFileSnapshot(filePath)
-    const name = filePath.split(/[\\/]/).pop() || filePath
+    const { content, modified } = await readFileSnapshot(normalizedFilePath)
+    const name = normalizedFilePath.split(/[\\/]/).pop() || normalizedFilePath
     const newFile: FileNode = {
       id: `import-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name,
       type: "file",
       content,
-      filePath,
+      filePath: normalizedFilePath,
       sourceModified: modified,
     }
 
     newFiles.push(newFile)
-    seenPaths.add(filePath)
+    console.log("[RadishMD][import] imported", {
+      normalizedFilePath,
+      newFileId: newFile.id,
+      contentLength: content.length,
+    })
+    seenPaths.add(normalizedFilePath)
 
     if (!newActivationTargetId) {
       newActivationTargetId = newFile.id
@@ -86,17 +108,19 @@ export async function importFiles(): Promise<void> {
   }
 
   if (newFiles.length > 0) {
+    console.log("[RadishMD][import] addFiles", { count: newFiles.length })
     store.addFiles(newFiles)
   }
 
   const activationTargetId = duplicateActivationTargetId ?? newActivationTargetId
   if (activationTargetId) {
+    console.log("[RadishMD][import] activation target", { activationTargetId })
     void store.activateFileById(activationTargetId)
 
     const activationTargetPath =
       store.findNodeById(activationTargetId)?.filePath ??
       selectedFiles.find((filePath) => {
-        const existingFile = store.findNodeByPath(filePath)
+        const existingFile = store.findNodeByPath(normalizeFilePath(filePath))
         return existingFile?.id === activationTargetId
       }) ??
       null

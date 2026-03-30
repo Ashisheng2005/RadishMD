@@ -3,7 +3,7 @@ import { flushSync } from "react-dom"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { toast } from "sonner"
-import { useEditorStore } from "@/lib/editor-store"
+import { normalizeFilePath, useEditorStore } from "@/lib/editor-store"
 import { TitleBar } from "./title-bar"
 import { Sidebar } from "./sidebar"
 import { EditorArea } from "./editor-area"
@@ -43,6 +43,7 @@ export function Editor() {
   const [cancellingDownload, setCancellingDownload] = useState(false)
   const activeDownloadIdRef = useRef<string | null>(null)
   const hasAutoCheckedUpdate = useRef(false)
+  const handledOpenedFilePathsRef = useRef(new Set<string>())
   const CHECK_UPDATE_MIN_LOADING_MS = 800
   const updateCheckState = checkingForUpdate
     ? "checking"
@@ -75,6 +76,27 @@ export function Editor() {
 
     return state.findNodeById(state.activeFileId)?.filePath ?? null
   })
+
+  const openFilePathOnce = (filePath: string) => {
+    const normalizedFilePath = normalizeFilePath(filePath)
+
+    console.log("[RadishMD][Editor] openFilePathOnce", {
+      filePath,
+      normalizedFilePath,
+    })
+
+    if (!normalizedFilePath || handledOpenedFilePathsRef.current.has(normalizedFilePath)) {
+      console.log("[RadishMD][Editor] openFilePathOnce skipped", {
+        normalizedFilePath,
+        alreadyHandled: handledOpenedFilePathsRef.current.has(normalizedFilePath),
+      })
+      return
+    }
+
+    handledOpenedFilePathsRef.current.add(normalizedFilePath)
+    console.log("[RadishMD][Editor] openFilePathOnce dispatch", { normalizedFilePath })
+    void openFileFromPath(normalizedFilePath)
+  }
 
   useEffect(() => {
     if (!import.meta.env.DEV) {
@@ -266,10 +288,46 @@ export function Editor() {
     }
 
     invoke<string | null>("get_cli_file_path").then((filePath) => {
+      console.log("[RadishMD][Editor] get_cli_file_path", { filePath })
       if (filePath) {
-        openFileFromPath(filePath)
+        openFilePathOnce(filePath)
       }
     })
+  }, [openFileFromPath])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return
+    }
+
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+
+    void listen<string>("radishmd://file-opened", (event) => {
+      console.log("[RadishMD][Editor] radishmd://file-opened", {
+        payload: event.payload,
+      })
+      openFilePathOnce(event.payload)
+    }).then((dispose) => {
+      if (cancelled) {
+        dispose()
+        return
+      }
+
+      unlisten = dispose
+    })
+
+    void invoke<string[]>("take_opened_files").then((filePaths) => {
+      console.log("[RadishMD][Editor] take_opened_files", { filePaths })
+      for (const filePath of filePaths) {
+        openFilePathOnce(filePath)
+      }
+    })
+
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
   }, [openFileFromPath])
 
   useEffect(() => {

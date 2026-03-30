@@ -32,6 +32,11 @@ jobs:
       # 取出仓库代码
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: git fetch --force --tags
 
       # 安装 Node.js，并开启 npm 缓存
       - name: Setup Node.js
@@ -68,12 +73,23 @@ jobs:
         run: npm run tauri build
 
       # 调用 Tauri 官方 action：构建并把产物上传到 GitHub Release
+      - name: Generate release notes
+        id: release_notes
+        shell: bash
+        run: |
+          body="$(npm run --silent release:notes -- ${{ github.ref_name }})"
+          {
+            echo 'body<<EOF'
+            printf '%s\n' "$body"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and release Tauri app
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
-          body: ${{ steps.get_msg.outputs.body }}
+          body: ${{ steps.release_notes.outputs.body }}
           files: |
             src-tauri/target/release/bundle/deb/*.deb
             src-tauri/target/release/bundle/rpm/*.rpm

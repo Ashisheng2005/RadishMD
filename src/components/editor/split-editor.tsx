@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type ClipboardEvent } from "react"
+import { useCallback, useDeferredValue, useEffect, useRef, type ClipboardEvent } from "react"
 import { useEditorStore } from "@/lib/editor-store"
 import { MarkdownRenderer } from "./markdown-renderer"
 import { Toolbar, FormatType } from "./toolbar"
@@ -7,6 +7,7 @@ import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/im
 
 export function SplitEditor() {
   const { content, setContent, splitViewMode } = useEditorStore()
+  const deferredContent = useDeferredValue(content)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const isSyncingScrollRef = useRef(false)
@@ -412,8 +413,13 @@ export function SplitEditor() {
                 {splitViewMode === "render" ? "渲染独显" : "预览"}
               </span>
             </div>
-            <div ref={previewRef} onScroll={handlePreviewScroll} className="flex-1 overflow-y-auto p-6 bg-background">
-              <MarkdownRenderer content={content} />
+            <div
+              ref={previewRef}
+              onScroll={handlePreviewScroll}
+              className="flex-1 overflow-y-auto p-6 bg-background"
+              style={{ overflowAnchor: "none" }}
+            >
+              <MarkdownRenderer content={deferredContent} />
             </div>
           </div>
         )}

@@ -70,6 +70,10 @@ static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> = Laz
     Mutex::new(None)
 });
 
+static PENDING_OPENED_FILES: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| {
+    Mutex::new(Vec::new())
+});
+
 #[derive(Default)]
 struct DownloadCancellationRegistry {
     tokens: Mutex<HashMap<String, Arc<AtomicBool>>>,
@@ -138,6 +142,18 @@ fn get_cli_file_path(app: tauri::AppHandle) -> Option<String> {
     let matches = cli.matches().ok()?;
     matches.args.get("file").cloned()
         .and_then(|file_arg| file_arg.value.as_str().map(|s| s.to_string()))
+}
+
+#[tauri::command]
+fn take_opened_files() -> Vec<String> {
+    match PENDING_OPENED_FILES.lock() {
+        Ok(mut pending) => {
+            let files = pending.drain(..).collect::<Vec<_>>();
+            eprintln!("[RadishMD][tauri] take_opened_files count={}", files.len());
+            files
+        }
+        Err(_) => Vec::new(),
+    }
 }
 
 fn normalize_version(version: &str) -> String {
@@ -444,7 +460,7 @@ fn clear_file_watcher() -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_cli::init())
@@ -455,6 +471,7 @@ pub fn run() {
             write_file,
             get_file_name,
             get_cli_file_path,
+            take_opened_files,
             get_app_version,
             check_latest_release,
             download_release_asset,
@@ -467,6 +484,32 @@ pub fn run() {
             window.set_title("RadishMD").ok();
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app_handle, _event| {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let tauri::RunEvent::Opened { urls } = _event {
+            eprintln!("[RadishMD][tauri] RunEvent::Opened urls={:?}", urls);
+            let file_paths = urls
+                .into_iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            if file_paths.is_empty() {
+                eprintln!("[RadishMD][tauri] RunEvent::Opened no file paths resolved");
+                return;
+            }
+
+            eprintln!("[RadishMD][tauri] RunEvent::Opened file_paths={:?}", file_paths);
+            if let Ok(mut pending) = PENDING_OPENED_FILES.lock() {
+                pending.extend(file_paths.iter().cloned());
+            }
+
+            for file_path in file_paths {
+                let _ = _app_handle.emit("radishmd://file-opened", file_path);
+            }
+        }
+    });
 }

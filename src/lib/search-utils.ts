@@ -11,6 +11,13 @@ export interface FileSearchResult {
   kind: "name" | "content"
 }
 
+export interface SearchCorpusFile {
+  fileId: string
+  fileName: string
+  filePath?: string
+  content: string
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
@@ -53,7 +60,34 @@ function walkNodes(nodes: FileNode[], visitor: (node: FileNode) => void) {
   }
 }
 
+export function buildSearchCorpus(nodes: FileNode[]) {
+  const corpus: SearchCorpusFile[] = []
+
+  walkNodes(nodes, (node) => {
+    if (node.type !== "file") {
+      return
+    }
+
+    corpus.push({
+      fileId: node.id,
+      fileName: node.name,
+      filePath: node.filePath,
+      content: node.content ?? "",
+    })
+  })
+
+  return corpus
+}
+
 export function searchLoadedFiles(nodes: FileNode[], query: string, activeFileId: string | null) {
+  return searchCorpus(buildSearchCorpus(nodes), query, activeFileId)
+}
+
+export function searchCorpus(
+  corpus: SearchCorpusFile[],
+  query: string,
+  activeFileId: string | null,
+) {
   const normalizedQuery = query.trim().toLowerCase()
 
   if (!normalizedQuery) {
@@ -62,14 +96,10 @@ export function searchLoadedFiles(nodes: FileNode[], query: string, activeFileId
 
   const results: FileSearchResult[] = []
 
-  walkNodes(nodes, (node) => {
-    if (node.type !== "file") {
-      return
-    }
-
-    const name = node.name.toLowerCase()
-    const filePath = node.filePath?.toLowerCase() ?? ""
-    const content = node.content ?? ""
+  for (const file of corpus) {
+    const name = file.fileName.toLowerCase()
+    const filePath = file.filePath?.toLowerCase() ?? ""
+    const content = file.content
 
     let score = 0
     let kind: FileSearchResult["kind"] = "content"
@@ -79,17 +109,17 @@ export function searchLoadedFiles(nodes: FileNode[], query: string, activeFileId
     if (name === normalizedQuery) {
       score += 1000
       kind = "name"
-      preview = node.filePath || node.name
+      preview = file.filePath || file.fileName
     } else if (name.includes(normalizedQuery)) {
       score += 700
       kind = "name"
-      preview = node.filePath || node.name
+      preview = file.filePath || file.fileName
     }
 
     if (filePath.includes(normalizedQuery)) {
       score += 400
       if (!preview) {
-        preview = node.filePath || node.name
+        preview = file.filePath || file.fileName
       }
     }
 
@@ -107,28 +137,28 @@ export function searchLoadedFiles(nodes: FileNode[], query: string, activeFileId
     }
 
     if (score === 0) {
-      return
+      continue
     }
 
     if (!preview) {
-      preview = node.filePath || node.name
+      preview = file.filePath || file.fileName
     }
 
-    if (node.id === activeFileId) {
+    if (file.fileId === activeFileId) {
       score += 25
     }
 
     results.push({
-      fileId: node.id,
-      fileName: node.name,
-      filePath: node.filePath,
+      fileId: file.fileId,
+      fileName: file.fileName,
+      filePath: file.filePath,
       line,
       content: preview,
-      isActive: node.id === activeFileId,
+      isActive: file.fileId === activeFileId,
       score,
       kind,
     })
-  })
+  }
 
   return results.sort((left, right) => {
     if (right.score !== left.score) {
