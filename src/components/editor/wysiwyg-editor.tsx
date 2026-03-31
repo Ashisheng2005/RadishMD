@@ -354,11 +354,49 @@ interface BlockEditorProps {
   onClick: () => void
   onRenderedContentClick: (event: React.MouseEvent<HTMLElement>) => void
   baseFilePath?: string | null
+  tabSize: number
 }
 
-function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onClick, onRenderedContentClick, baseFilePath }: BlockEditorProps) {
+function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onClick, onRenderedContentClick, baseFilePath, tabSize }: BlockEditorProps) {
   const ref = useRef<HTMLDivElement>(null)
   const [isEditing, setIsEditing] = useState(false)
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+    if (block.type === "code" && event.key === "Tab") {
+      event.preventDefault()
+      event.stopPropagation()
+
+      const element = ref.current
+      if (!element) {
+        return
+      }
+
+      const selection = window.getSelection()
+      const hasSelection = Boolean(selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed)
+
+      const result = hasSelection
+        ? (event.shiftKey
+            ? transformSelectedCodeLines(element, tabSize, "unindent")
+            : transformSelectedCodeLines(element, tabSize, "indent"))
+        : (event.shiftKey
+            ? unindentCurrentLine(element, tabSize)
+            : insertTextAtSelection(element, " ".repeat(tabSize)))
+
+      if (!result) {
+        return
+      }
+
+      onUpdate(result.nextText)
+
+      window.setTimeout(() => {
+        element.focus()
+        setCaretPosition(element, result.cursorPos)
+      }, 0)
+      return
+    }
+
+    onKeyDown(event, block)
+  }, [block, onKeyDown, onUpdate])
 
   const handleBlur = useCallback(() => {
     setIsEditing(false)
@@ -484,7 +522,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
-          onKeyDown={(e) => onKeyDown(e, block)}
+          onKeyDown={handleKeyDown}
           className={cn(
             "flex-1 outline-none",
             blockStyles[block.type],
@@ -520,7 +558,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
-          onKeyDown={(e) => onKeyDown(e, block)}
+          onKeyDown={handleKeyDown}
           className={cn("flex-1 outline-none", blockStyles[block.type])}
           dangerouslySetInnerHTML={{
             __html: renderedContent,
@@ -556,7 +594,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
-          onKeyDown={(e) => onKeyDown(e, block)}
+          onKeyDown={handleKeyDown}
           className={cn(
             blockStyles[block.type],
             block.language ? "rounded-b-lg rounded-t-none" : "rounded-lg"
@@ -590,7 +628,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
           onPaste={handlePaste}
           onBlur={handleBlur}
           onFocus={handleFocus}
-          onKeyDown={(e) => onKeyDown(e, block)}
+          onKeyDown={handleKeyDown}
           className={cn(
             "outline-none focus:outline-none",
             "rounded-lg"
@@ -616,7 +654,7 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
       onPaste={handlePaste}
       onBlur={handleBlur}
       onFocus={handleFocus}
-      onKeyDown={(e) => onKeyDown(e, block)}
+      onKeyDown={handleKeyDown}
       onClick={handleClick}
       className={cn(
         "outline-none py-0.5 rounded transition-colors",
@@ -694,8 +732,107 @@ function setCaretPosition(element: HTMLElement, position: number) {
   selection?.addRange(range)
 }
 
+function insertTextAtSelection(element: HTMLElement, textToInsert: string) {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+
+  const range = selection.getRangeAt(0)
+  if (!element.contains(range.startContainer)) return null
+
+  const start = getTextOffset(element, range.startContainer, range.startOffset)
+  const end = getTextOffset(element, range.endContainer, range.endOffset)
+  const currentText = element.innerText
+  const nextText = currentText.slice(0, start) + textToInsert + currentText.slice(end)
+
+  element.innerText = nextText
+  selection.removeAllRanges()
+
+  return {
+    nextText,
+    cursorPos: start + textToInsert.length,
+  }
+}
+
+function unindentCurrentLine(element: HTMLElement, indentSize = 4) {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+
+  const range = selection.getRangeAt(0)
+  if (!element.contains(range.startContainer)) return null
+
+  const cursorPosition = getTextOffset(element, range.startContainer, range.startOffset)
+  const currentText = element.innerText
+  const lineStart = currentText.lastIndexOf("\n", cursorPosition - 1) + 1
+  const lineIndent = currentText.slice(lineStart).match(/^[ \t]*/)?.[0] ?? ""
+
+  if (!lineIndent) {
+    return null
+  }
+
+  const removeCount = lineIndent.startsWith("\t") ? 1 : Math.min(indentSize, lineIndent.length)
+  const nextText = currentText.slice(0, lineStart) + currentText.slice(lineStart + removeCount)
+
+  element.innerText = nextText
+  selection.removeAllRanges()
+
+  return {
+    nextText,
+    cursorPos: Math.max(lineStart, cursorPosition - removeCount),
+  }
+}
+
+function transformSelectedCodeLines(
+  element: HTMLElement,
+  indentSize: number,
+  mode: "indent" | "unindent",
+) {
+  const selection = window.getSelection()
+  if (!selection || selection.rangeCount === 0) return null
+
+  const range = selection.getRangeAt(0)
+  if (!element.contains(range.startContainer)) return null
+
+  const start = getTextOffset(element, range.startContainer, range.startOffset)
+  const end = getTextOffset(element, range.endContainer, range.endOffset)
+  const currentText = element.innerText
+  const lineStart = currentText.lastIndexOf("\n", start - 1) + 1
+  let lineEnd = end
+
+  if (lineEnd < currentText.length && currentText[lineEnd] !== "\n") {
+    const nextLineBreak = currentText.indexOf("\n", end)
+    lineEnd = nextLineBreak === -1 ? currentText.length : nextLineBreak
+  }
+
+  const selectedText = currentText.slice(lineStart, lineEnd)
+  const lines = selectedText.split("\n")
+
+  const transformedLines = lines.map((line) => {
+    if (mode === "indent") {
+      return `${" ".repeat(indentSize)}${line}`
+    }
+
+    const lineIndent = line.match(/^[ \t]*/)?.[0] ?? ""
+    if (!lineIndent) {
+      return line
+    }
+
+    const removeCount = lineIndent.startsWith("\t") ? 1 : Math.min(indentSize, lineIndent.length)
+    return line.slice(removeCount)
+  })
+
+  const nextText = currentText.slice(0, lineStart) + transformedLines.join("\n") + currentText.slice(lineEnd)
+
+  element.innerText = nextText
+  selection.removeAllRanges()
+
+  return {
+    nextText,
+    cursorPos: lineStart + transformedLines[0].length,
+  }
+}
+
 export function WysiwygEditor() {
-  const { content, setContent, editMode, activeFileId, findNodeById } = useEditorStore()
+  const { content, setContent, editMode, activeFileId, findNodeById, tabSize } = useEditorStore()
   const [blocks, setBlocks] = useState<Block[]>(() => parseMarkdownToBlocks(content))
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
   const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null)
@@ -1204,6 +1341,7 @@ export function WysiwygEditor() {
                 onClick={() => setActiveBlockId(block.id)}
                 onRenderedContentClick={handleRenderedContentClick}
                 baseFilePath={activeFilePath}
+                tabSize={tabSize}
               />
             </div>
           ))}

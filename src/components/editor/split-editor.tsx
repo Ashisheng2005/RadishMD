@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/image-utils"
 
 export function SplitEditor() {
-  const { content, setContent, splitViewMode } = useEditorStore()
+  const { content, setContent, splitViewMode, tabSize } = useEditorStore()
   const deferredContent = useDeferredValue(content)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
@@ -215,6 +215,106 @@ export function SplitEditor() {
     })
   }, [setContent])
 
+  const handleTextareaKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Tab") {
+      return
+    }
+
+    event.preventDefault()
+
+    const textarea = textareaRef.current
+    if (!textarea) {
+      return
+    }
+
+    const start = textarea.selectionStart
+    const end = textarea.selectionEnd
+    const indent = " ".repeat(tabSize)
+    const hasSelection = start !== end
+
+    const getSelectedLineRange = () => {
+      const value = textarea.value
+      const lineStart = value.lastIndexOf("\n", start - 1) + 1
+      let lineEnd = end
+
+      if (lineEnd < value.length && value[lineEnd] !== "\n") {
+        const nextLineBreak = value.indexOf("\n", end)
+        lineEnd = nextLineBreak === -1 ? value.length : nextLineBreak
+      }
+
+      return { lineStart, lineEnd }
+    }
+
+    if (event.shiftKey) {
+      const { lineStart, lineEnd } = getSelectedLineRange()
+      const selectedText = textarea.value.slice(lineStart, lineEnd)
+      const lines = selectedText.split("\n")
+
+      const transformedLines = lines.map((line) => {
+        const lineIndent = line.match(/^[ \t]*/)?.[0] ?? ""
+
+        if (!lineIndent) {
+          return line
+        }
+
+        const removeCount = lineIndent.startsWith("\t") ? 1 : Math.min(tabSize, lineIndent.length)
+        return line.slice(removeCount)
+      })
+
+      if (!hasSelection) {
+        const lineIndent = selectedText.match(/^[ \t]*/)?.[0] ?? ""
+
+        if (!lineIndent) {
+          return
+        }
+
+        const removeCount = lineIndent.startsWith("\t") ? 1 : Math.min(tabSize, lineIndent.length)
+        const nextValue = textarea.value.slice(0, lineStart) + textarea.value.slice(lineStart + removeCount)
+        setContent(nextValue)
+
+        requestAnimationFrame(() => {
+          textarea.focus()
+          const nextStart = Math.max(lineStart, start - removeCount)
+          const nextEnd = Math.max(lineStart, end - removeCount)
+          textarea.setSelectionRange(nextStart, nextEnd)
+        })
+        return
+      }
+
+      const nextValue = textarea.value.slice(0, lineStart) + transformedLines.join("\n") + textarea.value.slice(lineEnd)
+      setContent(nextValue)
+
+      requestAnimationFrame(() => {
+        textarea.focus()
+        textarea.setSelectionRange(lineStart, lineStart + transformedLines.join("\n").length)
+      })
+      return
+    }
+
+    if (hasSelection) {
+      const { lineStart, lineEnd } = getSelectedLineRange()
+      const selectedText = textarea.value.slice(lineStart, lineEnd)
+      const nextValue = textarea.value.slice(0, lineStart) + selectedText.split("\n").map((line) => indent + line).join("\n") + textarea.value.slice(lineEnd)
+
+      setContent(nextValue)
+
+      requestAnimationFrame(() => {
+        textarea.focus()
+        textarea.setSelectionRange(lineStart, lineStart + selectedText.split("\n").map((line) => indent + line).join("\n").length)
+      })
+      return
+    }
+
+    const nextValue = textarea.value.slice(0, start) + indent + textarea.value.slice(end)
+
+    setContent(nextValue)
+
+    requestAnimationFrame(() => {
+      textarea.focus()
+      textarea.setSelectionRange(start + indent.length, start + indent.length)
+    })
+  }, [setContent])
+
   // Handle format button clicks
   const handleFormat = useCallback((type: FormatType) => {
     switch (type) {
@@ -392,6 +492,7 @@ export function SplitEditor() {
               data-editor-textarea
               value={content}
               onChange={(e) => setContent(e.target.value)}
+              onKeyDown={handleTextareaKeyDown}
               onPaste={handleTextareaPaste}
               onScroll={handleEditorScroll}
               className={cn(

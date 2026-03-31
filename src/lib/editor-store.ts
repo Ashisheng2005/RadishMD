@@ -21,6 +21,21 @@ interface FileSnapshot {
   modified: number | null
 }
 
+const TAB_SIZE_STORAGE_KEY = "radishmd.tabSize"
+
+function getInitialTabSize(): 4 | 6 | 8 {
+  if (typeof window === "undefined") {
+    return 4
+  }
+
+  const storedValue = window.localStorage.getItem(TAB_SIZE_STORAGE_KEY)
+  if (storedValue === "6" || storedValue === "8") {
+    return Number.parseInt(storedValue, 10) as 6 | 8
+  }
+
+  return 4
+}
+
 export function normalizeFilePath(filePath: string) {
   const trimmedPath = filePath.trim()
 
@@ -56,6 +71,7 @@ interface EditorState {
   theme: "light" | "dark" | "system"
   editMode: "split" | "wysiwyg"
   splitViewMode: "split" | "editor" | "render"
+  tabSize: 4 | 6 | 8
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
@@ -70,6 +86,7 @@ interface EditorState {
   toggleEditMode: () => void
   setEditMode: (mode: "split" | "wysiwyg") => void
   setSplitViewMode: (mode: "split" | "editor" | "render") => void
+  cycleTabSize: () => void
   toggleFolder: (id: string) => void
   updateCounts: (content: string) => void
   addFiles: (files: FileNode[]) => void
@@ -190,6 +207,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   theme: "system",
   editMode: "split",
   splitViewMode: "split",
+  tabSize: getInitialTabSize(),
   wordCount: 0,
   charCount: 0,
   creatingType: null,
@@ -314,6 +332,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   setEditMode: (mode: "split" | "wysiwyg") => set({ editMode: mode }),
 
   setSplitViewMode: (mode: "split" | "editor" | "render") => set({ splitViewMode: mode }),
+
+  cycleTabSize: () =>
+    set((state) => ({
+      tabSize: state.tabSize === 4 ? 6 : state.tabSize === 6 ? 8 : 4,
+    })),
 
   toggleFolder: (id: string) => {
     const toggleInNodes = (nodes: FileNode[]): FileNode[] => {
@@ -870,3 +893,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
   },
 }))
+
+if (typeof window !== "undefined") {
+  useEditorStore.subscribe((state, previousState) => {
+    if (state.tabSize === previousState.tabSize) {
+      return
+    }
+
+    window.localStorage.setItem(TAB_SIZE_STORAGE_KEY, String(state.tabSize))
+  })
+}

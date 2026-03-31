@@ -3,6 +3,12 @@ type SupportedCodeLanguage =
   | "cpp"
   | "javascript"
   | "typescript"
+  | "go"
+  | "rust"
+  | "java"
+  | "c"
+  | "php"
+  | "ruby"
   | "bash"
   | "json"
   | "html"
@@ -18,12 +24,20 @@ const LANGUAGE_ALIASES: Record<string, SupportedCodeLanguage> = {
   "c++": "cpp",
   cxx: "cpp",
   cc: "cpp",
+  c: "c",
   js: "javascript",
   jsx: "javascript",
   javascript: "javascript",
   ts: "typescript",
   tsx: "typescript",
   typescript: "typescript",
+  go: "go",
+  rust: "rust",
+  rs: "rust",
+  java: "java",
+  php: "php",
+  rb: "ruby",
+  ruby: "ruby",
   bash: "bash",
   sh: "bash",
   shell: "bash",
@@ -44,6 +58,12 @@ const KEYWORDS: Record<SupportedCodeLanguage, string[]> = {
   cpp: ["alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class", "compl", "concept", "const", "consteval", "constexpr", "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype", "default", "delete", "do", "double", "dynamic_cast", "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto", "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register", "reinterpret_cast", "return", "short", "signed", "sizeof", "static", "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local", "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq"],
   javascript: ["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new", "null", "return", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield"],
   typescript: ["as", "async", "await", "break", "case", "catch", "class", "const", "continue", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "from", "function", "if", "import", "in", "infer", "instanceof", "interface", "is", "keyof", "let", "namespace", "new", "null", "number", "object", "private", "protected", "public", "readonly", "return", "string", "super", "switch", "this", "throw", "true", "try", "type", "typeof", "undefined", "unique", "unknown", "var", "void", "while", "with", "yield"],
+  go: ["break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var"],
+  rust: ["as", "async", "await", "break", "const", "continue", "crate", "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use", "where", "while"],
+  java: ["abstract", "assert", "boolean", "break", "byte", "case", "catch", "char", "class", "const", "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "if", "implements", "import", "instanceof", "int", "interface", "long", "native", "new", "package", "private", "protected", "public", "return", "short", "static", "strictfp", "super", "switch", "synchronized", "this", "throw", "throws", "transient", "true", "try", "void", "volatile", "while"],
+  c: ["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"],
+  php: ["and", "array", "as", "break", "case", "catch", "class", "clone", "const", "continue", "declare", "default", "die", "do", "echo", "else", "elseif", "empty", "enddeclare", "endfor", "endforeach", "endif", "endswitch", "endwhile", "extends", "final", "finally", "for", "foreach", "function", "global", "if", "implements", "include", "include_once", "instanceof", "interface", "namespace", "new", "or", "private", "protected", "public", "return", "static", "switch", "throw", "trait", "try", "use", "var", "while", "xor", "yield"],
+  ruby: ["BEGIN", "END", "alias", "and", "begin", "break", "case", "class", "def", "defined?", "do", "else", "elsif", "end", "ensure", "false", "for", "if", "in", "module", "next", "nil", "not", "or", "redo", "rescue", "retry", "return", "self", "super", "then", "true", "undef", "unless", "until", "when", "while", "yield"],
   bash: ["case", "do", "done", "elif", "else", "esac", "fi", "for", "function", "if", "in", "local", "return", "select", "then", "time", "until", "while"],
   json: [],
   html: [],
@@ -103,18 +123,23 @@ function highlightLine(line: string, language: SupportedCodeLanguage) {
     return `${highlightPlainTextSegment(codePart, keywords)}${commentPart ? `<span class="text-muted-foreground italic">${escapeHtml(commentPart)}</span>` : ""}`
   }
 
-  if (language === "cpp" || language === "javascript" || language === "typescript" || language === "bash" || language === "css" || language === "sql") {
+  if (language === "cpp" || language === "c" || language === "javascript" || language === "typescript" || language === "go" || language === "rust" || language === "java" || language === "php" || language === "ruby" || language === "bash" || language === "css" || language === "sql") {
     const lineCommentIndex = line.indexOf("//")
-    const hashCommentIndex = language === "bash" ? line.indexOf("#") : -1
-    const commentIndexCandidates = [lineCommentIndex, hashCommentIndex].filter((value) => value >= 0)
+    const hashCommentIndex = language === "bash" || language === "ruby" ? line.indexOf("#") : -1
+    const blockCommentIndex = language === "php" ? line.indexOf("/*") : -1
+    const commentIndexCandidates = [lineCommentIndex, hashCommentIndex, blockCommentIndex].filter((value) => value >= 0)
     const commentIndex = commentIndexCandidates.length > 0 ? Math.min(...commentIndexCandidates) : -1
     const codePart = commentIndex >= 0 ? line.slice(0, commentIndex) : line
     const commentPart = commentIndex >= 0 ? line.slice(commentIndex) : ""
 
     let highlighted = highlightPlainTextSegment(codePart, keywords)
 
-    if (language === "cpp" && codePart.includes("/*") && codePart.includes("*/")) {
+    if ((language === "cpp" || language === "c" || language === "php") && codePart.includes("/*") && codePart.includes("*/")) {
       highlighted = highlighted.replace(/\/\*([\s\S]*?)\*\//g, (_match, comment) => `<span class="text-muted-foreground italic">/*${escapeHtml(comment)}*/</span>`)
+    }
+
+    if (language === "php") {
+      highlighted = highlighted.replace(/\$(\w+)/g, (_match, variableName) => `<span class="text-sky-600 dark:text-sky-300">$${escapeHtml(variableName)}</span>`)
     }
 
     return `${highlighted}${commentPart ? `<span class="text-muted-foreground italic">${escapeHtml(commentPart)}</span>` : ""}`

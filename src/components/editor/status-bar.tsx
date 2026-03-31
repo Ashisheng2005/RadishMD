@@ -8,6 +8,8 @@ export function StatusBar() {
     charCount,
     editMode,
     splitViewMode,
+    tabSize,
+    cycleTabSize,
     setSplitViewMode,
     activeFileId,
     findNodeById,
@@ -114,6 +116,17 @@ export function StatusBar() {
             })()}
           </Button>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-6 px-2 text-muted-foreground"
+          onClick={cycleTabSize}
+          aria-label={`Tab ${tabSize}`}
+          title={`Tab ${tabSize}`}
+        >
+          Tab{tabSize}
+        </Button>
         <span>{wordCount} 词</span>
         <span>{charCount} 字符</span>
       </div>
