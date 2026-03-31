@@ -1,4 +1,5 @@
 import { buildImageTag, parseImageReference } from "@/lib/image-utils"
+import { renderCodeBlockHtml } from "@/lib/code-highlighting"
 
 export interface MarkdownRenderChunk {
   key: string
@@ -228,13 +229,13 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
     case "heading6":
       return `<h6 class="text-sm font-semibold mt-6 mb-2 text-foreground">${renderInlineMarkdown(block.content, activeFilePath)}</h6>`
     case "code":
-      return `<pre class="bg-muted p-4 rounded-md overflow-x-auto my-4 !font-mono"><code class="text-sm !font-mono whitespace-pre"${block.language ? ` data-language="${escapeHtml(block.language)}"` : ""}>${escapeHtml(block.content)}</code></pre>`
+      return renderCodeBlockHtml(block.content, block.language)
     case "quote":
       return `<blockquote class="border-l-4 border-primary pl-4 py-2 my-4 bg-muted/50 rounded-r-md text-muted-foreground italic">${renderInlineMarkdown(block.content, activeFilePath)}</blockquote>`
     case "list":
-      return `<li class="ml-4 list-disc">${renderInlineMarkdown(block.content, activeFilePath)}</li>`
+      return `<ul class="my-3 pl-6 list-disc"><li class="leading-relaxed">${renderInlineMarkdown(block.content, activeFilePath)}</li></ul>`
     case "task":
-      return `<div class="flex items-center gap-2 my-1"><input type="checkbox" ${block.checked ? "checked" : ""} disabled class="rounded border-border" /><span class="${block.checked ? "line-through text-muted-foreground" : ""}">${renderInlineMarkdown(block.content, activeFilePath)}</span></div>`
+      return `<ul class="my-3 pl-6 list-disc"><li class="flex items-start gap-2 leading-relaxed"><input type="checkbox" ${block.checked ? "checked" : ""} disabled class="mt-1 rounded border-border" /><span class="${block.checked ? "line-through text-muted-foreground" : ""}">${renderInlineMarkdown(block.content, activeFilePath)}</span></li></ul>`
     case "hr":
       return '<hr class="my-8 border-border" />'
     case "table":

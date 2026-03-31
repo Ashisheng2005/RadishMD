@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useEditorStore } from "@/lib/editor-store"
 import { buildImageTag, extractImageSourceFromClipboard, getImageAltFromSource, isStandaloneImageReference, parseImageReference, resolveImageSource } from "@/lib/image-utils"
+import { normalizeCodeLanguage, renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
 import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
 import { ImageLightbox } from "./image-lightbox"
@@ -76,6 +77,14 @@ function parseTableMarkdownToHtml(content: string) {
 
 function renderPlainText(text: string) {
   return escapeHtml(text).replace(/\n/g, "<br>")
+}
+
+function renderCodeBlockContent(text: string, language?: string) {
+  if (!normalizeCodeLanguage(language)) {
+    return renderPlainText(text)
+  }
+
+  return renderCodeBlockInnerHtml(text, language)
 }
 
 function parseMarkdownToBlocks(markdown: string): Block[] {
@@ -522,9 +531,9 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
   }
 
   if (block.type === "code") {
-    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
-      ? block.content.replace(/\n/g, "<br>")
-      : renderInlineMarkdown(block.content, baseFilePath)
+    const renderedContent = isEditing
+      ? renderPlainText(block.content)
+      : renderCodeBlockContent(block.content, block.language)
 
     return (
       <div
@@ -552,9 +561,10 @@ function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onCli
             blockStyles[block.type],
             block.language ? "rounded-b-lg rounded-t-none" : "rounded-lg"
           )}
-        >
-          {isEditing && !isImageOnlyMarkdown(block.content) ? block.content : renderedContent}
-        </div>
+          dangerouslySetInnerHTML={{
+            __html: renderedContent,
+          }}
+        />
       </div>
     )
   }
