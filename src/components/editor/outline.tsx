@@ -9,7 +9,7 @@ interface HeadingItem {
 }
 
 export function Outline() {
-  const { content, isOutlineOpen, editMode } = useEditorStore()
+  const { content, isOutlineOpen, editMode, splitViewMode } = useEditorStore()
 
   const headings = useMemo(() => {
     const lines = content.split("\n")
@@ -38,7 +38,7 @@ export function Outline() {
   }, [content])
 
   const handleHeadingClick = (heading: HeadingItem) => {
-    if (editMode === "split") {
+    if (editMode === "split" && splitViewMode !== "render") {
       const textarea = document.querySelector(
         "[data-editor-textarea]"
       ) as HTMLTextAreaElement | null

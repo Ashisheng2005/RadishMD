@@ -3,11 +3,13 @@ import { buildImageTag, parseImageReference } from "@/lib/image-utils"
 export interface MarkdownRenderChunk {
   key: string
   html: string
+  sourceLine: number
 }
 
 interface MarkdownBlock {
   type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "task" | "hr" | "table"
   content: string
+  sourceLine: number
   checked?: boolean
   language?: string
 }
@@ -95,6 +97,7 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
     if (line.startsWith("```") ) {
       const language = line.slice(3).trim()
       const codeLines: string[] = []
+      const sourceLine = index
       index += 1
 
       while (index < lines.length && !lines[index].startsWith("```")) {
@@ -102,13 +105,13 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
         index += 1
       }
 
-      blocks.push({ type: "code", content: codeLines.join("\n"), language })
+      blocks.push({ type: "code", content: codeLines.join("\n"), language, sourceLine })
       index += 1
       continue
     }
 
     if (line.match(/^---+$/)) {
-      blocks.push({ type: "hr", content: "" })
+      blocks.push({ type: "hr", content: "", sourceLine: index })
       index += 1
       continue
     }
@@ -116,28 +119,28 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
     const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
     if (headingMatch) {
       const level = headingMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6
-      blocks.push({ type: `heading${level}` as MarkdownBlock["type"], content: headingMatch[2] })
+      blocks.push({ type: `heading${level}` as MarkdownBlock["type"], content: headingMatch[2], sourceLine: index })
       index += 1
       continue
     }
 
     const taskMatch = line.match(/^-\s+\[([ x])\]\s+(.*)$/)
     if (taskMatch) {
-      blocks.push({ type: "task", content: taskMatch[2], checked: taskMatch[1] === "x" })
+      blocks.push({ type: "task", content: taskMatch[2], checked: taskMatch[1] === "x", sourceLine: index })
       index += 1
       continue
     }
 
     const listMatch = line.match(/^-\s+(.*)$/)
     if (listMatch) {
-      blocks.push({ type: "list", content: listMatch[1] })
+      blocks.push({ type: "list", content: listMatch[1], sourceLine: index })
       index += 1
       continue
     }
 
     const quoteMatch = line.match(/^>\s*(.*)$/)
     if (quoteMatch) {
-      blocks.push({ type: "quote", content: quoteMatch[1] })
+      blocks.push({ type: "quote", content: quoteMatch[1], sourceLine: index })
       index += 1
       continue
     }
@@ -151,7 +154,7 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
         index += 1
       }
 
-      blocks.push({ type: "table", content: tableLines.join("\n") })
+      blocks.push({ type: "table", content: tableLines.join("\n"), sourceLine: index - tableLines.length })
       continue
     }
 
@@ -176,11 +179,11 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       index += 1
     }
 
-    blocks.push({ type: "paragraph", content: paragraphLines.join("\n") })
+    blocks.push({ type: "paragraph", content: paragraphLines.join("\n"), sourceLine: index - paragraphLines.length })
   }
 
   if (blocks.length === 0) {
-    blocks.push({ type: "paragraph", content: "" })
+    blocks.push({ type: "paragraph", content: "", sourceLine: 0 })
   }
 
   return blocks
@@ -289,6 +292,7 @@ export function renderMarkdownToHtmlChunks(
       return {
         key: `${signature}:${occurrence}`,
         html,
+        sourceLine: block.sourceLine,
       }
     })
     .filter((chunk) => chunk.html.length > 0)

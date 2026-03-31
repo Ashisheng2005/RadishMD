@@ -77,7 +77,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
         if (!postRenderRequest(renderContent, renderActiveFilePath)) {
           const chunks = renderMarkdownToHtmlChunks(renderContent, renderActiveFilePath)
-              setRenderedChunks(chunks)
+          setRenderedChunks(chunks)
           setIsRendering(false)
         }
       }, 220)
@@ -217,7 +217,11 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
           </div>
         ) : null}
         {renderedChunks.map((chunk) => (
-          <div key={chunk.key} dangerouslySetInnerHTML={{ __html: chunk.html }} />
+          <div
+            key={chunk.key}
+            data-source-line={chunk.sourceLine}
+            dangerouslySetInnerHTML={{ __html: chunk.html }}
+          />
         ))}
       </div>
       {previewImage && (
