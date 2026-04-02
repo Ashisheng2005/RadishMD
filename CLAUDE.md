@@ -1,9 +1,7 @@
 # CLAUDE.md
 
- 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-if your name is 
 ## Project Overview
 
 RadishMD is a Tauri 2 desktop application with a React + TypeScript frontend. It's a Markdown editor inspired by Typora's WYSIWYG editing experience.
@@ -55,7 +53,7 @@ StatusBar
 The WYSIWYG editor uses a **block-based contenteditable** approach:
 
 1. **Markdown → Blocks**: `parseMarkdownToBlocks(markdown)` splits content into `Block[]`
-   - Block types: `paragraph`, `heading1-6`, `code`, `quote`, `list`, `task`, `hr`, `table`
+   - Block types: `paragraph`, `heading1-6`, `code`, `quote`, `list`, `ordered`, `task`, `hr`, `table`
    - **Consecutive non-empty lines merge into one paragraph block** (multi-line support)
 
 2. **Blocks → HTML**: Each `BlockEditor` renders via `contenteditable` div
@@ -65,8 +63,8 @@ The WYSIWYG editor uses a **block-based contenteditable** approach:
 3. **Blocks → Markdown**: `blocksToMarkdown(blocks)` converts back to markdown string
 
 4. **Block Types with Multi-line Support**:
-   - `paragraph`, `list`, `task` → Enter inserts `<br>`, supports multi-line
-   - `heading`, `code`, `quote`, `hr` → Enter creates new block below
+   - `paragraph`, `list`, `ordered`, `task`, `code` → Enter inserts newline, supports multi-line
+   - `heading`, `quote`, `hr`, `table` → Enter creates new block below
 
 ### State Management (`src/lib/editor-store.ts`)
 

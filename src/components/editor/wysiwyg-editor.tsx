@@ -2,1109 +2,233 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { useEditorStore } from "@/lib/editor-store"
-import { buildImageTag, extractImageSourceFromClipboard, getImageAltFromSource, isStandaloneImageReference, parseImageReference, resolveImageSource } from "@/lib/image-utils"
-import { normalizeCodeLanguage, renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
-import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
 import { ImageLightbox } from "./image-lightbox"
-import { FormatType, Toolbar } from "./toolbar"
-
-interface Block {
-  id: string
-  sourceLine: number
-  type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "task" | "hr" | "table"
-  content: string
-  checked?: boolean
-  language?: string
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-}
-
-function isTableSeparatorLine(line: string) {
-  const trimmed = line.trim()
-
-  if (!trimmed.includes("|")) {
-    return false
-  }
-
-  const cells = trimmed
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim())
-
-  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
-}
-
-function isTableRowLine(line: string) {
-  return line.includes("|") && line.trim().length > 0
-}
-
-function parseTableMarkdownToHtml(content: string) {
-  const lines = content.split("\n").filter((line) => line.trim().length > 0)
-
-  if (lines.length < 2 || !isTableSeparatorLine(lines[1])) {
-    return `<div class="rounded-lg border border-border bg-muted/20 p-3 font-mono text-sm whitespace-pre-wrap">${escapeHtml(content)}</div>`
-  }
-
-  const headerCells = lines[0]
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => `<th class="border border-border px-3 py-2 text-left font-medium bg-muted">${escapeHtml(cell.trim())}</th>`)
-    .join("")
-
-  const bodyRows = lines.slice(2).map((row) => {
-    const cells = row
-      .trim()
-      .replace(/^\|/, "")
-      .replace(/\|$/, "")
-      .split("|")
-      .map((cell) => `<td class="border border-border px-3 py-2 align-top">${escapeHtml(cell.trim())}</td>`)
-      .join("")
-
-    return `<tr>${cells}</tr>`
-  }).join("")
-
-  return `<div class="overflow-x-auto rounded-lg border border-border bg-background"><table class="w-full border-collapse text-sm"><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`
-}
-
-function renderPlainText(text: string) {
-  return escapeHtml(text).replace(/\n/g, "<br>")
-}
-
-function renderCodeBlockContent(text: string, language?: string) {
-  if (!normalizeCodeLanguage(language)) {
-    return renderPlainText(text)
-  }
-
-  return renderCodeBlockInnerHtml(text, language)
-}
-
-function parseMarkdownToBlocks(markdown: string): Block[] {
-  const lines = markdown.split("\n")
-  const blocks: Block[] = []
-  let i = 0
-  let blockId = 0
-
-  while (i < lines.length) {
-    const line = lines[i]
-    const id = `block-${blockId++}`
-
-    // Code block
-    if (line.startsWith("```")) {
-      const sourceLine = i
-      const language = line.slice(3).trim()
-      const codeLines: string[] = []
-      i++
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i])
-        i++
-      }
-      blocks.push({
-        id,
-        sourceLine,
-        type: "code",
-        content: codeLines.join("\n"),
-        language,
-      })
-      i++
-      continue
-    }
-
-    // Horizontal rule
-    if (line.match(/^---+$/)) {
-      blocks.push({ id, sourceLine: i, type: "hr", content: "" })
-      i++
-      continue
-    }
-
-    // Headings
-    const h6Match = line.match(/^######\s+(.*)$/)
-    if (h6Match) {
-      blocks.push({ id, sourceLine: i, type: "heading6", content: h6Match[1] })
-      i++
-      continue
-    }
-    const h5Match = line.match(/^#####\s+(.*)$/)
-    if (h5Match) {
-      blocks.push({ id, sourceLine: i, type: "heading5", content: h5Match[1] })
-      i++
-      continue
-    }
-    const h4Match = line.match(/^####\s+(.*)$/)
-    if (h4Match) {
-      blocks.push({ id, sourceLine: i, type: "heading4", content: h4Match[1] })
-      i++
-      continue
-    }
-    const h3Match = line.match(/^###\s+(.*)$/)
-    if (h3Match) {
-      blocks.push({ id, sourceLine: i, type: "heading3", content: h3Match[1] })
-      i++
-      continue
-    }
-    const h2Match = line.match(/^##\s+(.*)$/)
-    if (h2Match) {
-      blocks.push({ id, sourceLine: i, type: "heading2", content: h2Match[1] })
-      i++
-      continue
-    }
-    const h1Match = line.match(/^#\s+(.*)$/)
-    if (h1Match) {
-      blocks.push({ id, sourceLine: i, type: "heading1", content: h1Match[1] })
-      i++
-      continue
-    }
-
-    // Task list
-    const taskMatch = line.match(/^-\s+\[([ x])\]\s+(.*)$/)
-    if (taskMatch) {
-      blocks.push({
-        id,
-        sourceLine: i,
-        type: "task",
-        content: taskMatch[2],
-        checked: taskMatch[1] === "x",
-      })
-      i++
-      continue
-    }
-
-    // Unordered list
-    const listMatch = line.match(/^-\s+(.*)$/)
-    if (listMatch) {
-      blocks.push({ id, sourceLine: i, type: "list", content: listMatch[1] })
-      i++
-      continue
-    }
-
-    // Blockquote
-    const quoteMatch = line.match(/^>\s*(.*)$/)
-    if (quoteMatch) {
-      blocks.push({ id, sourceLine: i, type: "quote", content: quoteMatch[1] })
-      i++
-      continue
-    }
-
-    // Table
-    if (i + 1 < lines.length && isTableRowLine(line) && isTableSeparatorLine(lines[i + 1])) {
-      const tableLines: string[] = [line, lines[i + 1]]
-      i += 2
-
-      while (i < lines.length && isTableRowLine(lines[i])) {
-        tableLines.push(lines[i])
-        i++
-      }
-
-      blocks.push({ id, sourceLine: i - tableLines.length, type: "table", content: tableLines.join("\n") })
-      continue
-    }
-
-    // Empty line or paragraph - merge consecutive non-empty lines into one paragraph
-    if (line.trim() === "") {
-      i++
-      continue
-    }
-
-    // Collect consecutive non-empty lines for this paragraph
-    const paragraphLines: string[] = [line]
-    i++
-    while (i < lines.length) {
-      const nextLine = lines[i]
-      // Stop if empty line or a special block type starts a new line
-      if (nextLine.trim() === "") break
-      if (nextLine.startsWith("```")) break
-      if (nextLine.match(/^---+$/)) break
-      if (nextLine.match(/^#{1,6}\s/)) break
-      if (nextLine.match(/^-\s/)) break
-      if (nextLine.match(/^>\s/)) break
-      paragraphLines.push(nextLine)
-      i++
-    }
-
-    blocks.push({ id, sourceLine: i - paragraphLines.length, type: "paragraph", content: paragraphLines.join("\n") })
-  }
-
-  if (blocks.length === 0) {
-    blocks.push({ id: "block-0", sourceLine: 0, type: "paragraph", content: "" })
-  }
-
-  return blocks
-}
-
-function blocksToMarkdown(blocks: Block[]): string {
-  return blocks
-    .map((block) => {
-      switch (block.type) {
-        case "heading1":
-          return `# ${block.content}`
-        case "heading2":
-          return `## ${block.content}`
-        case "heading3":
-          return `### ${block.content}`
-        case "heading4":
-          return `#### ${block.content}`
-        case "heading5":
-          return `##### ${block.content}`
-        case "heading6":
-          return `###### ${block.content}`
-        case "code":
-          return `\`\`\`${block.language || ""}\n${block.content}\n\`\`\``
-        case "quote":
-          return `> ${block.content}`
-        case "list":
-          return `- ${block.content}`
-        case "task":
-          return `- [${block.checked ? "x" : " "}] ${block.content}`
-        case "hr":
-          return "---"
-        case "table":
-          return block.content
-        default:
-          return block.content
-      }
-    })
-    .join("\n")
-}
-
-function renderInlineMarkdown(text: string, baseFilePath?: string | null): string {
-  let result = text
-
-  const trimmedText = text.trim()
-  const parsedImageReference = parseImageReference(trimmedText)
-  if (parsedImageReference) {
-    return buildImageTag(parsedImageReference.src, parsedImageReference.alt, baseFilePath)
-  }
-
-  // Escape HTML
-  result = result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-
-  // Convert newlines to <br> for multi-line support
-  result = result.replace(/\n/g, "<br>")
-
-  // Bold + Italic
-  result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-
-  // Bold
-  result = result.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-
-  // Italic
-  result = result.replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
-
-  // Strikethrough
-  result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
-
-  // Images
-  result = result.replace(
-    /!\[([^\]]*)\]\(([^)]+)\)/g,
-    (_match, alt, src) => buildImageTag(src, alt, baseFilePath)
-  )
-  result = result.replace(
-    /!([^\[\]\(\)\n]+)\(([^)]+)\)/g,
-    (_match, alt, src) => buildImageTag(src, alt, baseFilePath)
-  )
-  result = result.replace(
-    /!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g,
-    (_match, alt, src) => buildImageTag(src, alt, baseFilePath)
-  )
-
-  // Inline code
-  result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
-
-  // Links
-  result = result.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>'
-  )
-
-  return result
-}
-
-function isImageOnlyMarkdown(text: string) {
-  const trimmed = text.trim()
-
-  if (!trimmed) {
-    return false
-  }
-
-  return (
-    isStandaloneImageReference(trimmed) ||
-    /^!\[[^\]]*\]\([^)]+\)$/.test(trimmed) ||
-    /^![^\[\]\(\)\n]+\([^)]+\)$/.test(trimmed)
-  )
-}
-
-function openRenderedTarget(target: string) {
-  void openExternalTarget(target)
-}
-
-interface BlockEditorProps {
-  block: Block
-  onUpdate: (content: string) => void
-  onKeyDown: (e: React.KeyboardEvent, block: Block) => void
-  onToggleTask?: () => void
-  isActive: boolean
-  onClick: () => void
-  onRenderedContentClick: (event: React.MouseEvent<HTMLElement>) => void
-  baseFilePath?: string | null
-  tabSize: number
-}
-
-function BlockEditor({ block, onUpdate, onKeyDown, onToggleTask, isActive, onClick, onRenderedContentClick, baseFilePath, tabSize }: BlockEditorProps) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [isEditing, setIsEditing] = useState(false)
-
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
-    if (block.type === "code" && event.key === "Tab") {
-      event.preventDefault()
-      event.stopPropagation()
-
-      const element = ref.current
-      if (!element) {
-        return
-      }
-
-      const selection = window.getSelection()
-      const hasSelection = Boolean(selection && selection.rangeCount > 0 && !selection.getRangeAt(0).collapsed)
-
-      const result = hasSelection
-        ? (event.shiftKey
-            ? transformSelectedCodeLines(element, tabSize, "unindent")
-            : transformSelectedCodeLines(element, tabSize, "indent"))
-        : (event.shiftKey
-            ? unindentCurrentLine(element, tabSize)
-            : insertTextAtSelection(element, " ".repeat(tabSize)))
-
-      if (!result) {
-        return
-      }
-
-      onUpdate(result.nextText)
-
-      window.setTimeout(() => {
-        element.focus()
-        setCaretPosition(element, result.cursorPos)
-      }, 0)
-      return
-    }
-
-    onKeyDown(event, block)
-  }, [block, onKeyDown, onUpdate])
-
-  const handleBlur = useCallback(() => {
-    setIsEditing(false)
-    if (ref.current) {
-      const newContent = ref.current.innerText
-      if (newContent !== block.content) {
-        onUpdate(newContent)
-      }
-    }
-  }, [block.content, onUpdate])
-
-  const handleFocus = useCallback(() => {
-    setIsEditing(true)
-  }, [])
-
-  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLElement>) => {
-    const html = event.clipboardData.getData("text/html")
-    const text = event.clipboardData.getData("text/plain")
-    const imageSource = extractImageSourceFromClipboard(html, text)
-
-    if (!imageSource) {
-      return
-    }
-
-    event.preventDefault()
-
-    const markdownImage = `![${getImageAltFromSource(imageSource)}](${imageSource})`
-    const selection = window.getSelection()
-    if (!selection || selection.rangeCount === 0) {
-      return
-    }
-
-    const range = selection.getRangeAt(0)
-    range.deleteContents()
-    const textNode = document.createTextNode(markdownImage)
-    range.insertNode(textNode)
-    range.setStartAfter(textNode)
-    range.collapse(true)
-    selection.removeAllRanges()
-    selection.addRange(range)
-
-    window.setTimeout(() => {
-      if (ref.current) {
-        onUpdate(ref.current.innerText)
-      }
-    }, 0)
-  }, [onUpdate])
-
-  const handleClick = useCallback(() => {
-    onClick()
-    if (ref.current && block.type !== "hr") {
-      ref.current.focus()
-    }
-  }, [onClick, block.type])
-
-  const blockStyles: Record<Block["type"], string> = {
-    paragraph: "text-base leading-relaxed whitespace-pre-wrap",
-    heading1: "text-3xl font-bold mt-8 mb-4",
-    heading2: "text-2xl font-semibold mt-6 mb-3 pb-2 border-b border-border",
-    heading3: "text-xl font-semibold mt-5 mb-2",
-    heading4: "text-lg font-semibold mt-4 mb-2",
-    heading5: "text-base font-semibold mt-3 mb-1",
-    heading6: "text-sm font-semibold mt-3 mb-1 text-muted-foreground",
-    code: "font-mono text-sm bg-muted p-4 rounded-lg overflow-x-auto whitespace-pre",
-    quote: "border-l-4 border-primary pl-4 py-1 italic text-muted-foreground bg-muted/30 rounded-r",
-    list: "text-base leading-relaxed whitespace-pre-wrap",
-    task: "text-base leading-relaxed whitespace-pre-wrap",
-    hr: "",
-    table: "text-base",
-  }
-
-  if (block.type === "hr") {
-    return (
-      <div
-        className={cn(
-          "py-4 cursor-pointer",
-          isActive && "bg-accent/10 rounded"
-        )}
-        onClick={handleClick}
-      >
-        <hr className="border-border" />
-      </div>
-    )
-  }
-
-  if (block.type === "task") {
-    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
-      ? block.content.replace(/\n/g, "<br>")
-      : renderInlineMarkdown(block.content, baseFilePath)
-
-    return (
-      <div
-        className={cn(
-          "flex items-start gap-3 py-1 group",
-          isActive && "bg-accent/10 rounded px-2 -mx-2"
-        )}
-        onClick={handleClick}
-      >
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onToggleTask?.()
-          }}
-          className={cn(
-            "mt-1.5 w-4 h-4 rounded border-2 flex items-center justify-center transition-colors",
-            block.checked
-              ? "bg-primary border-primary text-primary-foreground"
-              : "border-muted-foreground/50 hover:border-primary"
-          )}
-        >
-          {block.checked && (
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-            </svg>
-          )}
-        </button>
-        <div
-          ref={ref}
-          contentEditable
-          suppressContentEditableWarning
-          onClickCapture={onRenderedContentClick}
-          onPaste={handlePaste}
-          onBlur={handleBlur}
-          onFocus={handleFocus}
-          onKeyDown={handleKeyDown}
-          className={cn(
-            "flex-1 outline-none",
-            blockStyles[block.type],
-            block.checked && "line-through text-muted-foreground"
-          )}
-          dangerouslySetInnerHTML={{
-            __html: renderedContent,
-          }}
-        />
-      </div>
-    )
-  }
-
-  if (block.type === "list") {
-    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
-      ? block.content.replace(/\n/g, "<br>")
-      : renderInlineMarkdown(block.content, baseFilePath)
-
-    return (
-      <div
-        className={cn(
-          "flex items-start gap-3 py-0.5",
-          isActive && "bg-accent/10 rounded px-2 -mx-2"
-        )}
-        onClick={handleClick}
-      >
-        <span className="mt-2 w-1.5 h-1.5 rounded-full bg-foreground/70 shrink-0" />
-        <div
-          ref={ref}
-          contentEditable
-          suppressContentEditableWarning
-          onClickCapture={onRenderedContentClick}
-          onPaste={handlePaste}
-          onBlur={handleBlur}
-          onFocus={handleFocus}
-          onKeyDown={handleKeyDown}
-          className={cn("flex-1 outline-none", blockStyles[block.type])}
-          dangerouslySetInnerHTML={{
-            __html: renderedContent,
-          }}
-        />
-      </div>
-    )
-  }
-
-  if (block.type === "code") {
-    const renderedContent = isEditing
-      ? renderPlainText(block.content)
-      : renderCodeBlockContent(block.content, block.language)
-
-    return (
-      <div
-        className={cn(
-          "my-3",
-          isActive && "ring-2 ring-primary/30 rounded-lg"
-        )}
-        onClick={handleClick}
-      >
-        {block.language && (
-          <div className="bg-muted/80 px-4 py-1.5 rounded-t-lg border-b border-border/50">
-            <span className="text-xs font-mono text-muted-foreground">{block.language}</span>
-          </div>
-        )}
-        <div
-          ref={ref}
-          contentEditable
-          suppressContentEditableWarning
-          onClickCapture={onRenderedContentClick}
-          onPaste={handlePaste}
-          onBlur={handleBlur}
-          onFocus={handleFocus}
-          onKeyDown={handleKeyDown}
-          className={cn(
-            blockStyles[block.type],
-            block.language ? "rounded-b-lg rounded-t-none" : "rounded-lg"
-          )}
-          dangerouslySetInnerHTML={{
-            __html: renderedContent,
-          }}
-        />
-      </div>
-    )
-  }
-
-  if (block.type === "table") {
-    const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
-      ? renderPlainText(block.content)
-      : parseTableMarkdownToHtml(block.content)
-
-    return (
-      <div
-        className={cn(
-          "my-3 rounded-lg transition-colors",
-          isActive && "ring-2 ring-primary/30"
-        )}
-        onClick={handleClick}
-      >
-        <div
-          ref={ref}
-          contentEditable
-          suppressContentEditableWarning
-          onClickCapture={onRenderedContentClick}
-          onPaste={handlePaste}
-          onBlur={handleBlur}
-          onFocus={handleFocus}
-          onKeyDown={handleKeyDown}
-          className={cn(
-            "outline-none focus:outline-none",
-            "rounded-lg"
-          )}
-          dangerouslySetInnerHTML={{
-            __html: renderedContent,
-          }}
-        />
-      </div>
-    )
-  }
-
-  const renderedContent = isEditing && !isImageOnlyMarkdown(block.content)
-    ? block.content.replace(/\n/g, "<br>")
-    : renderInlineMarkdown(block.content, baseFilePath) || "&nbsp;"
-
-  return (
-    <div
-      ref={ref}
-      contentEditable
-      suppressContentEditableWarning
-      onClickCapture={onRenderedContentClick}
-      onPaste={handlePaste}
-      onBlur={handleBlur}
-      onFocus={handleFocus}
-      onKeyDown={handleKeyDown}
-      onClick={handleClick}
-      className={cn(
-        "outline-none py-0.5 rounded transition-colors",
-        blockStyles[block.type],
-        isActive && "bg-accent/10 px-2 -mx-2",
-        !block.content && "min-h-[1.5em]"
-      )}
-      data-placeholder={!block.content ? "输入内容..." : undefined}
-      dangerouslySetInnerHTML={{
-        __html: renderedContent,
-      }}
-    />
-  )
-}
-
-// Helper: get text offset from node/offset to element start
-function getTextOffset(element: HTMLElement, node: Node, offset: number): number {
-  const treeWalker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null)
-  let totalOffset = 0
-  let currentNode: Node | null = null
-
-  while ((currentNode = treeWalker.nextNode())) {
-    if (currentNode === node) {
-      return totalOffset + offset
-    }
-    totalOffset += (currentNode as Text).textContent?.length || 0
-  }
-  return totalOffset + offset
-}
-
-// Helper: get caret position in element
-function getCaretPosition(element: HTMLElement): number {
-  const selection = window.getSelection()
-  if (!selection || selection.rangeCount === 0) return 0
-
-  const range = selection.getRangeAt(0)
-  const preRange = range.cloneRange()
-  preRange.selectNodeContents(element)
-  preRange.setEnd(range.startContainer, range.startOffset)
-  return preRange.toString().length
-}
-
-// Helper: set caret position in element
-function setCaretPosition(element: HTMLElement, position: number) {
-  const range = document.createRange()
-  const selection = window.getSelection()
-
-  let charCount = 0
-  let found = false
-
-  function traverseNodes(node: Node) {
-    if (found) return
-    if (node.nodeType === Node.TEXT_NODE) {
-      const nodeLength = node.textContent?.length || 0
-      if (charCount + nodeLength >= position) {
-        range.setStart(node, position - charCount)
-        range.collapse(true)
-        found = true
-      }
-      charCount += nodeLength
-    } else {
-      for (let i = 0; i < node.childNodes.length; i++) {
-        traverseNodes(node.childNodes[i])
-        if (found) return
-      }
-    }
-  }
-
-  traverseNodes(element)
-  if (!found) {
-    range.selectNodeContents(element)
-    range.collapse(false)
-  }
-  selection?.removeAllRanges()
-  selection?.addRange(range)
-}
-
-function insertTextAtSelection(element: HTMLElement, textToInsert: string) {
-  const selection = window.getSelection()
-  if (!selection || selection.rangeCount === 0) return null
-
-  const range = selection.getRangeAt(0)
-  if (!element.contains(range.startContainer)) return null
-
-  const start = getTextOffset(element, range.startContainer, range.startOffset)
-  const end = getTextOffset(element, range.endContainer, range.endOffset)
-  const currentText = element.innerText
-  const nextText = currentText.slice(0, start) + textToInsert + currentText.slice(end)
-
-  element.innerText = nextText
-  selection.removeAllRanges()
-
-  return {
-    nextText,
-    cursorPos: start + textToInsert.length,
-  }
-}
-
-function unindentCurrentLine(element: HTMLElement, indentSize = 4) {
-  const selection = window.getSelection()
-  if (!selection || selection.rangeCount === 0) return null
-
-  const range = selection.getRangeAt(0)
-  if (!element.contains(range.startContainer)) return null
-
-  const cursorPosition = getTextOffset(element, range.startContainer, range.startOffset)
-  const currentText = element.innerText
-  const lineStart = currentText.lastIndexOf("\n", cursorPosition - 1) + 1
-  const lineIndent = currentText.slice(lineStart).match(/^[ \t]*/)?.[0] ?? ""
-
-  if (!lineIndent) {
-    return null
-  }
-
-  const removeCount = lineIndent.startsWith("\t") ? 1 : Math.min(indentSize, lineIndent.length)
-  const nextText = currentText.slice(0, lineStart) + currentText.slice(lineStart + removeCount)
-
-  element.innerText = nextText
-  selection.removeAllRanges()
-
-  return {
-    nextText,
-    cursorPos: Math.max(lineStart, cursorPosition - removeCount),
-  }
-}
-
-function transformSelectedCodeLines(
-  element: HTMLElement,
-  indentSize: number,
-  mode: "indent" | "unindent",
-) {
-  const selection = window.getSelection()
-  if (!selection || selection.rangeCount === 0) return null
-
-  const range = selection.getRangeAt(0)
-  if (!element.contains(range.startContainer)) return null
-
-  const start = getTextOffset(element, range.startContainer, range.startOffset)
-  const end = getTextOffset(element, range.endContainer, range.endOffset)
-  const currentText = element.innerText
-  const lineStart = currentText.lastIndexOf("\n", start - 1) + 1
-  let lineEnd = end
-
-  if (lineEnd < currentText.length && currentText[lineEnd] !== "\n") {
-    const nextLineBreak = currentText.indexOf("\n", end)
-    lineEnd = nextLineBreak === -1 ? currentText.length : nextLineBreak
-  }
-
-  const selectedText = currentText.slice(lineStart, lineEnd)
-  const lines = selectedText.split("\n")
-
-  const transformedLines = lines.map((line) => {
-    if (mode === "indent") {
-      return `${" ".repeat(indentSize)}${line}`
-    }
-
-    const lineIndent = line.match(/^[ \t]*/)?.[0] ?? ""
-    if (!lineIndent) {
-      return line
-    }
-
-    const removeCount = lineIndent.startsWith("\t") ? 1 : Math.min(indentSize, lineIndent.length)
-    return line.slice(removeCount)
-  })
-
-  const nextText = currentText.slice(0, lineStart) + transformedLines.join("\n") + currentText.slice(lineEnd)
-
-  element.innerText = nextText
-  selection.removeAllRanges()
-
-  return {
-    nextText,
-    cursorPos: lineStart + transformedLines[0].length,
-  }
-}
+import { Toolbar, type FormatType } from "./toolbar"
+import { Block } from "./blocks"
+import { parseMarkdownToBlocks, blocksToMarkdown } from "./blocks/utils"
+import type { Block as BlockType } from "./blocks/types"
 
 export function WysiwygEditor() {
-  const { content, setContent, editMode, activeFileId, findNodeById, tabSize } = useEditorStore()
-  const [blocks, setBlocks] = useState<Block[]>(() => parseMarkdownToBlocks(content))
+  const { content, setContent, editMode, activeFileId, findNodeById } = useEditorStore()
+  const [blocks, setBlocks] = useState<BlockType[]>(() => parseMarkdownToBlocks(content))
   const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
   const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null)
   const isInternalUpdate = useRef(false)
   const activeFilePath = activeFileId ? findNodeById(activeFileId)?.filePath ?? null : null
+  const editorRef = useRef<HTMLDivElement>(null)
 
-  const handleRenderedContentClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
-    const target = event.target as HTMLElement | null
-    if (!target) return
-
-    const imageElement = target.closest("img[src]") as HTMLImageElement | null
-    if (imageElement) {
-      const imageSource = imageElement.getAttribute("src")
-      if (!imageSource) return
-
-      event.preventDefault()
-
-      if (event.ctrlKey || event.metaKey) {
-        openRenderedTarget(imageSource)
-        return
-      }
-
-      setPreviewImage({
-        src: imageSource,
-        alt: imageElement.getAttribute("alt") || undefined,
-      })
-      return
+  // Sync blocks when content changes externally
+  useEffect(() => {
+    if (!isInternalUpdate.current) {
+      setBlocks(parseMarkdownToBlocks(content))
     }
+  }, [content])
 
-    const linkElement = target.closest("a[href]") as HTMLAnchorElement | null
-    if (!linkElement) return
-
-    const targetUrl = linkElement.getAttribute("href")
-    if (!targetUrl) return
-
-    event.preventDefault()
-
-    if (!event.ctrlKey && !event.metaKey) {
-      return
+  // Sync blocks to content when blocks change
+  useEffect(() => {
+    if (isInternalUpdate.current) {
+      setContent(blocksToMarkdown(blocks))
+      isInternalUpdate.current = false
     }
+  }, [blocks, setContent])
 
-    openRenderedTarget(targetUrl)
+  const updateBlock = useCallback((blockId: string, newContent: string) => {
+    isInternalUpdate.current = true
+    setBlocks((prev) => prev.map((b) => (b.id === blockId ? { ...b, content: newContent } : b)))
   }, [])
 
-  // Get current block content and selection
-  const getActiveBlockContent = useCallback((): { block: Block; element: HTMLElement } | null => {
-    if (!activeBlockId) return null
-    const block = blocks.find((b) => b.id === activeBlockId)
-    const element = document.querySelector(`[data-block-id="${activeBlockId}"]`)?.querySelector('[contenteditable]') as HTMLElement | null
-    if (!block || !element) return null
-    return { block, element }
-  }, [activeBlockId, blocks])
+  const toggleTask = useCallback((blockId: string) => {
+    isInternalUpdate.current = true
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.id === blockId && b.type === "task" ? { ...b, checked: !b.checked } : b
+      )
+    )
+  }, [])
 
-  // Wrap or unwrap selection with formatting markers
-  const wrapSelection = useCallback((before: string, after: string) => {
-    const result = getActiveBlockContent()
-    if (!result) return
-    const { block, element } = result
+  // Wrap selection with formatting markers
+  const wrapSelection = useCallback(
+    (before: string, after: string) => {
+      if (!activeBlockId) return
 
-    const selection = window.getSelection()
-    if (!selection || selection.rangeCount === 0) return
+      const textarea = editorRef.current?.querySelector(
+        `[data-block-id="${activeBlockId}"] textarea`
+      ) as HTMLTextAreaElement | null
 
-    const range = selection.getRangeAt(0)
-    const selectedText = selection.toString()
+      if (!textarea) return
 
-    let newContent: string
-    let newCursorPos: number | null = null
+      const start = textarea.selectionStart
+      const end = textarea.selectionEnd
+      const fullText = textarea.value
+      const selectedText = fullText.slice(start, end)
 
-    if (selectedText) {
-      // Check if selection is already wrapped
-      const fullText = element.innerText
-      const startOffset = getTextOffset(element, range.startContainer, range.startOffset)
-      const endOffset = getTextOffset(element, range.endContainer, range.endOffset)
-      const textBefore = fullText.slice(Math.max(0, startOffset - before.length), startOffset)
-      const textAfter = fullText.slice(endOffset, endOffset + after.length)
+      let newContent: string
+      let newCursorPos: number | null = null
 
-      if (textBefore === before && textAfter === after) {
-        // Unwrap: remove formatting
-        newContent =
-          fullText.slice(0, startOffset - before.length) +
-          selectedText +
-          fullText.slice(endOffset + after.length)
-        newCursorPos = startOffset - before.length + selectedText.length
+      if (selectedText) {
+        newContent = fullText.slice(0, start) + before + selectedText + after + fullText.slice(end)
+        newCursorPos = start + before.length + selectedText.length + after.length
       } else {
-        // Wrap: add formatting
-        newContent =
-          fullText.slice(0, startOffset) +
-          before + selectedText + after +
-          fullText.slice(endOffset)
-        newCursorPos = startOffset + before.length + selectedText.length + after.length
+        newContent = fullText.slice(0, start) + before + after + fullText.slice(start)
+        newCursorPos = start + before.length
       }
-    } else {
-      // No selection: insert markers with cursor in middle
-      const cursorPos = getCaretPosition(element)
-      newContent =
-        element.innerText.slice(0, cursorPos) +
-        before + after +
-        element.innerText.slice(cursorPos)
-      newCursorPos = cursorPos + before.length
-    }
 
-    // Update block
-    const blockIndex = blocks.findIndex((b) => b.id === block.id)
-    if (blockIndex === -1) return
+      isInternalUpdate.current = true
+      updateBlock(activeBlockId, newContent)
 
-    isInternalUpdate.current = true
-    setBlocks((prev) => {
-      const newBlocks = [...prev]
-      newBlocks[blockIndex] = { ...newBlocks[blockIndex], content: newContent }
-      return newBlocks
-    })
+      requestAnimationFrame(() => {
+        textarea.focus()
+        if (newCursorPos !== null) {
+          textarea.selectionStart = textarea.selectionEnd = newCursorPos
+        }
+      })
+    },
+    [activeBlockId, updateBlock]
+  )
 
-    // Restore cursor position after DOM update
-    setTimeout(() => {
-      element.innerText = newContent
-      if (newCursorPos !== null) {
-        setCaretPosition(element, newCursorPos)
+  // Toggle line prefix (for lists, quotes, headings)
+  const formatLine = useCallback(
+    (prefix: string, pattern: RegExp) => {
+      if (!activeBlockId) return
+
+      const textarea = editorRef.current?.querySelector(
+        `[data-block-id="${activeBlockId}"] textarea`
+      ) as HTMLTextAreaElement | null
+
+      if (!textarea) return
+
+      const fullText = textarea.value
+      const cursorPos = textarea.selectionStart
+
+      // Find line boundaries
+      const lineStart = fullText.lastIndexOf("\n", cursorPos - 1) + 1
+      const lineEnd = fullText.indexOf("\n", cursorPos)
+      const actualLineEnd = lineEnd === -1 ? fullText.length : lineEnd
+
+      const line = fullText.slice(lineStart, actualLineEnd)
+
+      let newLine: string
+      let cursorOffset: number
+
+      if (pattern.test(line)) {
+        // Remove prefix
+        newLine = line.replace(pattern, "")
+        cursorOffset = -prefix.length
+      } else {
+        // Add prefix - first remove any existing prefixes
+        const cleanLine = line
+          .replace(/^#{1,6}\s/, "")
+          .replace(/^-\s/, "")
+          .replace(/^\d+\.\s/, "")
+          .replace(/^>\s/, "")
+        newLine = prefix + cleanLine
+        cursorOffset = prefix.length
       }
-    }, 0)
-  }, [getActiveBlockContent, blocks])
 
-  // Format entire line (for lists, quotes, and headings)
-  const formatLine = useCallback((type: "list" | "ordered" | "quote" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6") => {
-    const result = getActiveBlockContent()
-    if (!result) return
-    const { block, element } = result
+      const newContent = fullText.slice(0, lineStart) + newLine + fullText.slice(actualLineEnd)
 
-    const fullText = element.innerText
-    const cursorPos = getCaretPosition(element)
+      isInternalUpdate.current = true
+      updateBlock(activeBlockId, newContent)
 
-    // Find line boundaries
-    let lineStart = fullText.lastIndexOf("\n", cursorPos - 1) + 1
-    let lineEnd = fullText.indexOf("\n", cursorPos)
-    if (lineEnd === -1) lineEnd = fullText.length
+      requestAnimationFrame(() => {
+        textarea.focus()
+        const newCursorPos = Math.max(lineStart, Math.min(cursorPos + cursorOffset, lineStart + newLine.length))
+        textarea.selectionStart = textarea.selectionEnd = newCursorPos
+      })
+    },
+    [activeBlockId, updateBlock]
+  )
 
-    const line = fullText.slice(lineStart, lineEnd)
-
-    // Determine prefix and pattern
-    let prefix: string
-    let pattern: RegExp
-    switch (type) {
-      case "list":
-        prefix = "- "
-        pattern = /^-\s/
-        break
-      case "ordered":
-        prefix = "1. "
-        pattern = /^\d+\.\s/
-        break
-      case "quote":
-        prefix = "> "
-        pattern = /^>\s/
-        break
-      case "heading1":
-        prefix = "# "
-        pattern = /^#\s/
-        break
-      case "heading2":
-        prefix = "## "
-        pattern = /^##\s/
-        break
-      case "heading3":
-        prefix = "### "
-        pattern = /^###\s/
-        break
-      case "heading4":
-        prefix = "#### "
-        pattern = /^####\s/
-        break
-      case "heading5":
-        prefix = "##### "
-        pattern = /^#####\s/
-        break
-      case "heading6":
-        prefix = "###### "
-        pattern = /^######\s/
-        break
-    }
-
-    let newLine: string
-    let cursorOffset: number
-    if (pattern.test(line)) {
-      // Remove prefix (toggle off)
-      newLine = line.replace(pattern, "")
-      cursorOffset = -prefix.length
-    } else {
-      // Add prefix - first remove any existing heading/list/quote prefixes
-      const oldHeadingMatch = line.match(/^#{1,6}\s/)
-      const oldListMatch = line.match(/^-\s/)
-      const oldOrderedMatch = line.match(/^\d+\.\s/)
-      const oldQuoteMatch = line.match(/^>\s/)
-
-      let cleanLine = line
-        .replace(/^#{1,6}\s/, "")  // Remove any heading prefix
-        .replace(/^-\s/, "")       // Remove list prefix
-        .replace(/^\d+\.\s/, "")   // Remove ordered list prefix
-        .replace(/^>\s/, "")       // Remove quote prefix
-      newLine = prefix + cleanLine
-
-      // Calculate cursor offset based on what prefix was removed
-      const oldPrefixLen = (oldHeadingMatch?.[0] || oldListMatch?.[0] || oldOrderedMatch?.[0] || oldQuoteMatch?.[0] || "").length
-      cursorOffset = prefix.length - oldPrefixLen
-    }
-
-    const newContent = fullText.slice(0, lineStart) + newLine + fullText.slice(lineEnd)
-    const blockIndex = blocks.findIndex((b) => b.id === block.id)
-    if (blockIndex === -1) return
-
-    isInternalUpdate.current = true
-    setBlocks((prev) => {
-      const newBlocks = [...prev]
-      newBlocks[blockIndex] = { ...newBlocks[blockIndex], content: newContent }
-      return newBlocks
-    })
-
-    setTimeout(() => {
-      element.innerText = newContent
-      const newCursorPos = cursorPos + cursorOffset
-      setCaretPosition(element, Math.max(lineStart, Math.min(newCursorPos, lineStart + newLine.length)))
-    }, 0)
-  }, [getActiveBlockContent, blocks])
-
-  // Handle keyboard shortcuts
-  const handleFormatShortcut = useCallback((formatType: FormatType) => {
-    switch (formatType) {
-      case "bold":
-        wrapSelection("**", "**")
-        break
-      case "italic":
-        wrapSelection("*", "*")
-        break
-      case "strikethrough":
-        wrapSelection("~~", "~~")
-        break
-      case "code":
-        wrapSelection("`", "`")
-        break
-      case "link":
-        wrapSelection("[", "](url)")
-        break
-      case "image":
-        wrapSelection("![", "](url)")
-        break
-      case "list":
-        formatLine("list")
-        break
-      case "ordered":
-        formatLine("ordered")
-        break
-      case "quote":
-        formatLine("quote")
-        break
-      case "heading1":
-        formatLine("heading1")
-        break
-      case "heading2":
-        formatLine("heading2")
-        break
-      case "heading3":
-        formatLine("heading3")
-        break
-      case "heading4":
-        formatLine("heading4")
-        break
-      case "heading5":
-        formatLine("heading5")
-        break
-      case "heading6":
-        formatLine("heading6")
-        break
-    }
-  }, [wrapSelection, formatLine])
+  // Handle format shortcuts from toolbar
+  const handleFormatShortcut = useCallback(
+    (formatType: FormatType) => {
+      switch (formatType) {
+        case "bold":
+          wrapSelection("**", "**")
+          break
+        case "italic":
+          wrapSelection("*", "*")
+          break
+        case "strikethrough":
+          wrapSelection("~~", "~~")
+          break
+        case "code":
+          wrapSelection("`", "`")
+          break
+        case "link":
+          wrapSelection("[", "](url)")
+          break
+        case "image":
+          wrapSelection("![", "](url)")
+          break
+        case "list":
+          formatLine("- ", /^-\s/)
+          break
+        case "ordered":
+          formatLine("1. ", /^\d+\.\s/)
+          break
+        case "quote":
+          formatLine("> ", /^>\s/)
+          break
+        case "heading1":
+          formatLine("# ", /^#\s/)
+          break
+        case "heading2":
+          formatLine("## ", /^##\s/)
+          break
+        case "heading3":
+          formatLine("### ", /^###\s/)
+          break
+        case "heading4":
+          formatLine("#### ", /^####\s/)
+          break
+        case "heading5":
+          formatLine("##### ", /^#####\s/)
+          break
+        case "heading6":
+          formatLine("###### ", /^######\s/)
+          break
+        case "hr":
+          // Insert HR block
+          isInternalUpdate.current = true
+          setBlocks((prev) => {
+            const idx = prev.findIndex((b) => b.id === activeBlockId)
+            if (idx === -1) return prev
+            const newBlocks = [...prev]
+            newBlocks.splice(idx + 1, 0, {
+              id: `block-${Date.now()}`,
+              sourceLine: prev[idx].sourceLine + 1,
+              type: "hr",
+              content: "",
+            })
+            return newBlocks
+          })
+          break
+        case "tasklist":
+          formatLine("- [ ] ", /^-\s\[\s\]\s/)
+          break
+        case "table":
+          // Insert table block
+          isInternalUpdate.current = true
+          const tableContent = `| Header 1 | Header 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |`
+          setBlocks((prev) => {
+            const idx = prev.findIndex((b) => b.id === activeBlockId)
+            if (idx === -1) return prev
+            const newBlocks = [...prev]
+            newBlocks.splice(idx + 1, 0, {
+              id: `block-${Date.now()}`,
+              sourceLine: prev[idx].sourceLine + 1,
+              type: "paragraph",
+              content: tableContent,
+            })
+            return newBlocks
+          })
+          break
+      }
+    },
+    [activeBlockId, wrapSelection, formatLine]
+  )
 
   // Expose format handler for toolbar
   useEffect(() => {
@@ -1113,7 +237,7 @@ export function WysiwygEditor() {
     }
   }, [editMode, handleFormatShortcut])
 
-  // Global keyboard event handler
+  // Global keyboard event handler for toolbar shortcuts
   useEffect(() => {
     if (editMode !== "wysiwyg") return
 
@@ -1123,7 +247,6 @@ export function WysiwygEditor() {
       const key = e.key.toLowerCase()
       const shift = e.shiftKey
 
-      // Inline formatting: Ctrl+Key
       if (!shift) {
         switch (key) {
           case "b":
@@ -1165,7 +288,6 @@ export function WysiwygEditor() {
         }
       }
 
-      // Shift+Ctrl+Key
       if (shift && e.ctrlKey) {
         switch (key) {
           case "s":
@@ -1200,130 +322,71 @@ export function WysiwygEditor() {
     return () => window.removeEventListener("keydown", handleKeyDown)
   }, [editMode, handleFormatShortcut])
 
-  // Sync blocks with content when content changes externally
-  useEffect(() => {
-    if (!isInternalUpdate.current) {
-      setBlocks(parseMarkdownToBlocks(content))
-    }
-  }, [content])
+  const handleRenderedContentClick = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      const target = event.target as HTMLElement | null
+      if (!target) return
 
-  // Sync blocks to content when blocks change internally
-  useEffect(() => {
-    if (isInternalUpdate.current) {
-      setContent(blocksToMarkdown(blocks))
-      // Reset after syncing
-      isInternalUpdate.current = false
-    }
-  }, [blocks, setContent])
+      // Handle image click
+      const img = target.closest("img[src]") as HTMLImageElement | null
+      if (img) {
+        const src = img.getAttribute("src")
+        if (!src) return
 
-  const updateBlock = useCallback((blockId: string, newContent: string) => {
-    isInternalUpdate.current = true
-    setBlocks((prev) => prev.map((b) =>
-      b.id === blockId ? { ...b, content: newContent } : b
-    ))
-  }, [])
+        event.preventDefault()
 
-  const toggleTask = useCallback((blockId: string) => {
-    isInternalUpdate.current = true
-    setBlocks((prev) => prev.map((b) =>
-      b.id === blockId && b.type === "task" ? { ...b, checked: !b.checked } : b
-    ))
-  }, [])
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent, block: Block) => {
-    if (e.key === "Enter") {
-      // For paragraph/list/task blocks: insert <br> for newlines (allow multi-line)
-      // For other blocks (heading, code, quote, hr): create new block
-      const blockTypesWithMultiLine = ["paragraph", "list", "task", "table"]
-
-      if (blockTypesWithMultiLine.includes(block.type) || e.shiftKey) {
-        // Insert <br> at cursor position (multi-line support)
-        e.preventDefault()
-        const selection = window.getSelection()
-        if (!selection || selection.rangeCount === 0) return
-
-        const range = selection.getRangeAt(0)
-        range.deleteContents()
-
-        const br = document.createElement("br")
-        range.insertNode(br)
-
-        // Move cursor after <br>
-        range.setStartAfter(br)
-        range.setEndAfter(br)
-        selection.removeAllRanges()
-        selection.addRange(range)
-
-        // Force content update
-        const blockIndex = blocks.findIndex((b) => b.id === block.id)
-        if (blockIndex !== -1) {
-          isInternalUpdate.current = true
-          // The content is already updated via DOM manipulation
-          // We need to sync the block content with the actual DOM
-          setBlocks((prev) => [...prev])
+        if (event.ctrlKey || event.metaKey) {
+          openExternalTarget(src)
+          return
         }
+
+        setPreviewImage({
+          src,
+          alt: img.getAttribute("alt") || undefined,
+        })
         return
       }
 
-      // For headings, code, quote, hr: create new block below
-      e.preventDefault()
-      const result = getActiveBlockContent()
-      if (!result) return
-      const { element } = result
+      // Handle link click
+      const link = target.closest("a[href]") as HTMLAnchorElement | null
+      if (link) {
+        const href = link.getAttribute("href")
+        if (!href) return
 
-      const caretPos = getCaretPosition(element)
-      const fullText = element.innerText
-      const textBefore = fullText.slice(0, caretPos)
-      const textAfter = fullText.slice(caretPos)
+        event.preventDefault()
 
-      const newBlock: Block = {
-        id: `block-${Date.now()}`,
-        sourceLine: block.sourceLine + textBefore.split("\n").length,
-        type: "paragraph",
-        content: textAfter,
-        checked: false,
+        if (event.ctrlKey || event.metaKey) {
+          openExternalTarget(href)
+        }
       }
+    },
+    []
+  )
 
-      isInternalUpdate.current = true
+  // Focus active block's textarea when activeBlockId changes
+  useEffect(() => {
+    if (!activeBlockId) return
 
-      setBlocks((prev) => {
-        const idx = prev.findIndex((b) => b.id === block.id)
-        if (idx === -1) return prev
-        return [
-          ...prev.slice(0, idx),
-          { ...prev[idx], content: textBefore },
-          newBlock,
-          ...prev.slice(idx + 1)
-        ]
-      })
-      setActiveBlockId(newBlock.id)
-
-      setTimeout(() => {
-        const el = document.querySelector(`[data-block-id="${newBlock.id}"] [contenteditable]`) as HTMLElement
-        if (el) {
-          el.focus()
-          setCaretPosition(el, 0)
+    requestAnimationFrame(() => {
+      const el = editorRef.current?.querySelector(`[data-block-id="${activeBlockId}"]`)
+      if (el) {
+        const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null
+        if (textarea) {
+          textarea.focus()
         }
-      }, 10)
-      return
-    }
-
-    if (e.key === "Backspace" && block.content === "" && blocks.length > 1) {
-      e.preventDefault()
-      setBlocks((prev) => {
-        const idx = prev.findIndex((b) => b.id === block.id)
-        if (idx > 0) {
-          setActiveBlockId(prev[idx - 1].id)
-        }
-        return prev.filter((b) => b.id !== block.id)
-      })
-    }
-  }, [blocks, getActiveBlockContent])
+      }
+    })
+  }, [activeBlockId])
 
   return (
     <div className="flex-1 flex flex-col h-full overflow-hidden">
       <Toolbar onFormat={handleFormatShortcut} />
-      <div className="flex-1 overflow-y-auto" data-editor-scroll-container>
+      <div
+        ref={editorRef}
+        className="flex-1 overflow-y-auto"
+        data-editor-scroll-container
+        onClickCapture={handleRenderedContentClick}
+      >
         <div className="max-w-3xl mx-auto px-8 py-12">
           {blocks.map((block) => (
             <div
@@ -1332,16 +395,14 @@ export function WysiwygEditor() {
               data-block-type={block.type}
               data-source-line={block.sourceLine}
             >
-              <BlockEditor
+              <Block
                 block={block}
-                onUpdate={(content) => updateBlock(block.id, content)}
-                onKeyDown={handleKeyDown}
-                onToggleTask={() => toggleTask(block.id)}
                 isActive={activeBlockId === block.id}
+                onUpdate={(content) => updateBlock(block.id, content)}
+                onToggleTask={block.type === "task" ? () => toggleTask(block.id) : undefined}
+                onFocus={() => setActiveBlockId(block.id)}
                 onClick={() => setActiveBlockId(block.id)}
-                onRenderedContentClick={handleRenderedContentClick}
                 baseFilePath={activeFilePath}
-                tabSize={tabSize}
               />
             </div>
           ))}
@@ -1355,7 +416,7 @@ export function WysiwygEditor() {
               setPreviewImage(null)
             }
           }}
-          src={resolveImageSource(previewImage.src, activeFilePath)}
+          src={previewImage.src}
           alt={previewImage.alt}
         />
       )}
