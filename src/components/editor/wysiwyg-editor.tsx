@@ -394,6 +394,7 @@ export function WysiwygEditor() {
               data-block-id={block.id}
               data-block-type={block.type}
               data-source-line={block.sourceLine}
+              style={{ contentVisibility: "auto" }}
             >
               <Block
                 block={block}

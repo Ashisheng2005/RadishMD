@@ -43,28 +43,33 @@ TitleBar
 ├── Sidebar (file tree, collapsible)
 ├── EditorArea
 │   ├── SplitEditor (textarea + preview)
-│   └── WysiwygEditor (block-based contenteditable)
+│   └── WysiwygEditor (block-based editor)
 └── Outline (markdown outline, collapsible)
 StatusBar
 ```
 
 ### WYSIWYG Editor Architecture (`wysiwyg-editor.tsx`)
 
-The WYSIWYG editor uses a **block-based contenteditable** approach:
+The WYSIWYG editor uses a **component-based approach** with controlled inputs:
 
-1. **Markdown → Blocks**: `parseMarkdownToBlocks(markdown)` splits content into `Block[]`
+1. **Markdown → Blocks**: `parseMarkdownToBlocks(markdown)` in `blocks/utils.ts` splits content into `Block[]`
    - Block types: `paragraph`, `heading1-6`, `code`, `quote`, `list`, `ordered`, `task`, `hr`, `table`
-   - **Consecutive non-empty lines merge into one paragraph block** (multi-line support)
 
-2. **Blocks → HTML**: Each `BlockEditor` renders via `contenteditable` div
-   - Reading mode: `renderInlineMarkdown(block.content)` shows styled HTML
-   - Editing mode: `block.content.replace(/\n/g, "<br>")` allows direct editing
+2. **Block Components** (`components/editor/blocks/`):
+   - `Block.tsx` - Unified block component with edit/render modes
+   - `types.ts` - Block and BlockType definitions
+   - `utils.ts` - parseMarkdownToBlocks, blocksToMarkdown, renderInlineMarkdown
 
-3. **Blocks → Markdown**: `blocksToMarkdown(blocks)` converts back to markdown string
+3. **Edit/Render Mode Toggle**:
+   - Click block → enters edit mode (shows textarea)
+   - Blur/Escape → exits edit mode, syncs content
+   - Uses `localContent` state with 300ms debounce for smooth input
 
-4. **Block Types with Multi-line Support**:
-   - `paragraph`, `list`, `ordered`, `task`, `code` → Enter inserts newline, supports multi-line
-   - `heading`, `quote`, `hr`, `table` → Enter creates new block below
+4. **Performance Optimizations**:
+   - Each Block maintains local state to avoid global re-renders
+   - 300ms debounce on text input updates
+   - CSS `content-visibility: auto` on block containers for lazy rendering
+   - Markdown-to-markdown sync only on internal updates
 
 ### State Management (`src/lib/editor-store.ts`)
 
@@ -126,6 +131,8 @@ Key methods:
 | `src/components/editor/index.tsx` | Main layout + global keyboard shortcuts |
 | `src/components/editor/editor-area.tsx` | Routes between Split/WYSIWYG modes |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
+| `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
+| `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
 | `src/components/editor/split-editor.tsx` | Textarea + preview split view |
 | `src/components/editor/toolbar.tsx` | `FormatType` enum and formatting buttons |
 | `src-tauri/src/lib.rs` | Rust commands: read/write file |
