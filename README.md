@@ -1,13 +1,18 @@
-# RadishMD
+<p align="center">
+  <img src="src-tauri/icons/128x128.png" alt="RadishMD" width="128" />
+</p>
 
-[English README](README.en.md) | 中文版
+<h1 align="center">RadishMD</h1>
 
-> 一款基于 Tauri 2 + React 19 + TypeScript 的桌面 Markdown 编辑器。
-> 面向日常写作、技术笔记和项目文档维护，提供编辑、预览、文件管理的一体化体验。
+<p align="center">
+  <a href="README.en.md">English README</a> · <a href="README.md">中文版</a>
+</p>
 
-## 项目概览
-
-RadishMD 采用本地优先的桌面架构，围绕 Markdown 源文本展开，兼顾所见即所得体验和传统 Markdown 写作流程。
+<p align="center">
+  一款基于 Tauri 2 + React 19 + TypeScript 的桌面 Markdown 编辑器。
+  <br />
+  面向日常写作、技术笔记和项目文档维护，提供编辑、预览、文件管理的一体化体验。
+</p>
 
 ## 界面预览
 

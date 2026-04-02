@@ -9,6 +9,7 @@ use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watc
 use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
+use base64::{Engine as _, engine::general_purpose::STANDARD as base64_engine};
 
 const GITHUB_OWNER: &str = "Ashisheng2005";
 const GITHUB_REPO: &str = "RadishMD";
@@ -134,6 +135,26 @@ fn get_file_name(file_path: String) -> Result<String, String> {
         .and_then(|n| n.to_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "Invalid file path".to_string())
+}
+
+#[tauri::command]
+fn read_image_as_data_url(path: String) -> Result<String, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    let mime = if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".ico") {
+        "image/x-icon"
+    } else {
+        "image/jpeg"
+    };
+    let base64 = base64_engine.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, base64))
 }
 
 #[tauri::command]
@@ -470,6 +491,7 @@ pub fn run() {
             read_file_snapshot,
             write_file,
             get_file_name,
+            read_image_as_data_url,
             get_cli_file_path,
             take_opened_files,
             get_app_version,

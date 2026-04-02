@@ -80,36 +80,9 @@ export function isStandaloneImageReference(value: string) {
   return parseImageReference(value) !== null
 }
 
-export function resolveImageSource(source: string, baseFilePath?: string | null) {
-  const trimmedSource = source.trim()
-
-  const directImageUrl = tryExtractDirectImageUrl(trimmedSource)
-  if (directImageUrl) {
-    return directImageUrl
-  }
-
-  if (
-    /^([a-zA-Z][a-zA-Z\d+.-]*:)?\/\//.test(trimmedSource) ||
-    /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(trimmedSource) ||
-    trimmedSource.startsWith("data:")
-  ) {
-    return trimmedSource
-  }
-
-  if (!baseFilePath) {
-    return trimmedSource
-  }
-
-  const normalizedBase = baseFilePath.replace(/\\/g, "/").replace(/\/[^/]*$/, "/")
-  const baseUrl = /^[a-zA-Z]:\//.test(normalizedBase)
-    ? `file:///${normalizedBase}`
-    : `file://${normalizedBase}`
-
-  try {
-    return new URL(trimmedSource, baseUrl).href
-  } catch {
-    return trimmedSource
-  }
+// Simple passthrough - let browser handle relative paths
+export function resolveImageSource(source: string, _baseFilePath?: string | null): string {
+  return source
 }
 
 export function getImageAltFromSource(source: string) {
@@ -123,9 +96,9 @@ export function getImageAltFromSource(source: string) {
   return fileName.replace(/\.[^.]+$/, "") || "图片"
 }
 
-export function buildImageTag(source: string, alt: string, baseFilePath?: string | null) {
-  const resolvedSource = resolveImageSource(source, baseFilePath)
-  return `<img src="${escapeHtmlAttribute(resolvedSource)}" alt="${escapeHtmlAttribute(alt)}" class="max-w-full rounded-md my-4" />`
+export function buildImageTag(source: string, alt: string, _baseFilePath?: string | null) {
+  // Direct use - let browser resolve relative paths
+  return `<img src="${escapeHtmlAttribute(source)}" alt="${escapeHtmlAttribute(alt)}" class="max-w-full rounded-md my-4" />`
 }
 
 export function extractImageSourceFromClipboard(html: string, text: string) {

@@ -258,8 +258,8 @@ export function blocksToMarkdown(blocks: Block[]): string {
 export function renderInlineMarkdown(text: string, _baseFilePath?: string | null): string {
   let result = text
 
-  // Escape HTML first
-  result = result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  // Don't escape HTML - let browser parse it as HTML
+  // WYSIWYG mode uses textarea for editing, so no XSS risk from user input
 
   // Convert newlines to <br> for multi-line support
   result = result.replace(/\n/g, "<br>")
