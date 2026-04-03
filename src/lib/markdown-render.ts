@@ -194,7 +194,7 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   let result = text
 
   const trimmedText = text.trim()
-  const parsedImageReference = parseImageReference(trimmedText)
+  const parsedImageReference = parseImageReference(trimmedText, true)
   if (parsedImageReference) {
     return buildImageTag(parsedImageReference.src, parsedImageReference.alt, baseFilePath)
   }
@@ -207,7 +207,7 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
   result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
   result = result.replace(/!([^\[\]\(\)\n]+)\(([^)]+)\)/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
-  result = result.replace(/!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
+  result = result.replace(/!([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
   result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>')
 
@@ -242,7 +242,7 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
       return parseTableMarkdownToHtml(block.content)
     case "paragraph": {
       const trimmed = block.content.trim()
-      const parsedImageReference = parseImageReference(trimmed)
+      const parsedImageReference = parseImageReference(trimmed, true)
 
       if (parsedImageReference) {
         return buildImageTag(parsedImageReference.src, parsedImageReference.alt, activeFilePath)

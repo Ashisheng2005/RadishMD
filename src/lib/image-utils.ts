@@ -38,20 +38,30 @@ export function escapeHtmlAttribute(value: string) {
     .replace(/'/g, "&#39;")
 }
 
-export function parseImageReference(value: string): { alt: string; src: string } | null {
+export function parseImageReference(value: string, requireExclamation = false): { alt: string; src: string } | null {
   const trimmed = value.trim()
   if (!trimmed) return null
 
-  const markdownMatch = trimmed.match(/^!?\[([^\]]*)\]\(([^)]+)\)$/)
+  const markdownPattern = requireExclamation ? /^!\[([^\]]*)\]\(([^)]+)\)$/ : /^!?\[([^\]]*)\]\(([^)]+)\)$/
+  const markdownMatch = trimmed.match(markdownPattern)
   if (markdownMatch?.[2]) {
+    // If requireExclamation is true, only match if ! is present
+    if (requireExclamation && !markdownMatch[0].startsWith('!')) {
+      return null
+    }
     return {
       alt: markdownMatch[1] || "图片",
       src: markdownMatch[2],
     }
   }
 
-  const shorthandMatch = trimmed.match(/^!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]$/)
+  const shorthandPattern = requireExclamation ? /^!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]$/ : /^!?([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]$/
+  const shorthandMatch = trimmed.match(shorthandPattern)
   if (shorthandMatch?.[2]) {
+    // If requireExclamation is true, only match if ! is present
+    if (requireExclamation && !shorthandMatch[0].startsWith('!')) {
+      return null
+    }
     return {
       alt: shorthandMatch[1].trim() || "图片",
       src: shorthandMatch[2].trim(),

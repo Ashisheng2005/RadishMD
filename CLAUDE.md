@@ -33,9 +33,13 @@ npm run tauri build    # Build production .exe
 - Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
 - Commands in `src-tauri/src/lib.rs`:
   - `read_file(path)` - Read file contents
+  - `read_file_snapshot(path)` - Read file with modification timestamp
   - `write_file(path, content)` - Write file
   - `get_file_name(file_path)` - Extract filename
+  - `read_image_as_data_url(path)` - Read image file as base64 data URL
   - `get_cli_file_path()` - Get CLI arg for file associations
+  - File watching: `watch_file_changes`, `clear_file_watcher`
+  - Updates: `check_latest_release`, `download_release_asset`, `cancel_download`
 
 ### Layout Structure
 ```
@@ -70,6 +74,12 @@ The WYSIWYG editor uses a **component-based approach** with controlled inputs:
    - 300ms debounce on text input updates
    - CSS `content-visibility: auto` on block containers for lazy rendering
    - Markdown-to-markdown sync only on internal updates
+
+5. **Image Handling** (`src/lib/image-utils.ts`):
+   - `resolveImageSource()` - Direct path passthrough, browser handles resolution
+   - `buildImageTag()` - Builds `<img>` tag with proper attributes
+   - `parseImageReference()` - Parses markdown image syntax `![alt](src)`
+   - Images use raw paths in both WYSIWYG and Split modes
 
 ### State Management (`src/lib/editor-store.ts`)
 
@@ -128,10 +138,12 @@ Key methods:
 |------|---------|
 | `src/lib/editor-store.ts` | Zustand store - all editor state |
 | `src/lib/file-operations.ts` | File import via Tauri dialog |
+| `src/lib/image-utils.ts` | Image path resolution and tag building |
 | `src/components/editor/index.tsx` | Main layout + global keyboard shortcuts |
 | `src/components/editor/editor-area.tsx` | Routes between Split/WYSIWYG modes |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
+| `src/components/editor/blocks/types.ts` | Block and BlockType definitions |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
 | `src/components/editor/split-editor.tsx` | Textarea + preview split view |
 | `src/components/editor/toolbar.tsx` | `FormatType` enum and formatting buttons |
