@@ -15,7 +15,7 @@ import { useCallback, useDeferredValue, useEffect, useRef, useState, useTransiti
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useEditorStore } from "@/lib/editor-store"
-import { type FileSearchResult } from "@/lib/search-utils"
+import { type FileSearchResult, buildSearchCorpus } from "@/lib/search-utils"
 import {
   Tooltip,
   TooltipContent,
@@ -23,7 +23,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { cn } from "@/lib/utils"
 
@@ -153,6 +152,8 @@ export function TitleBar({
   const searchInputRef = useRef<HTMLInputElement>(null)
   const searchWorkerRef = useRef<Worker | null>(null)
   const searchRequestIdRef = useRef(0)
+  const searchTimeoutRef = useRef<number | null>(null)
+  const searchDebounceRef = useRef<number | null>(null)
 
   const activeFile = activeFileId ? findNodeById(activeFileId) : null
 
@@ -162,6 +163,14 @@ export function TitleBar({
 
       if (!normalizedQuery) {
         setIsSearching(false)
+        if (searchDebounceRef.current !== null) {
+          window.clearTimeout(searchDebounceRef.current)
+          searchDebounceRef.current = null
+        }
+        if (searchTimeoutRef.current !== null) {
+          window.clearTimeout(searchTimeoutRef.current)
+          searchTimeoutRef.current = null
+        }
         startSearchTransition(() => {
           setSearchResults([])
         })
@@ -176,9 +185,21 @@ export function TitleBar({
         return
       }
 
+      // Clear previous timeout
+      if (searchTimeoutRef.current !== null) {
+        window.clearTimeout(searchTimeoutRef.current)
+      }
+
       const requestId = searchRequestIdRef.current + 1
       searchRequestIdRef.current = requestId
       setIsSearching(true)
+
+      // Set timeout as fallback
+      searchTimeoutRef.current = window.setTimeout(() => {
+        if (searchRequestIdRef.current === requestId) {
+          setIsSearching(false)
+        }
+      }, 2000)
 
       worker.postMessage({
         type: "search",
@@ -189,6 +210,19 @@ export function TitleBar({
     },
     [activeFileId, isSearchWorkerReady, startSearchTransition]
   )
+
+  const sendFilesToWorker = useCallback(() => {
+    const worker = searchWorkerRef.current
+    if (!worker || !isSearchWorkerReady) {
+      return
+    }
+    const searchCorpus = buildSearchCorpus(files)
+    worker.postMessage({
+      type: "set-files",
+      files: searchCorpus,
+    })
+    runSearch(deferredSearchQuery)
+  }, [files, isSearchWorkerReady, runSearch, deferredSearchQuery])
 
   useEffect(() => {
     setSelectedIndex(0)
@@ -222,6 +256,12 @@ export function TitleBar({
           return
         }
 
+        // Clear timeout on successful response
+        if (searchTimeoutRef.current !== null) {
+          window.clearTimeout(searchTimeoutRef.current)
+          searchTimeoutRef.current = null
+        }
+
         startSearchTransition(() => {
           setSearchResults(message.results || [])
           setIsSearching(false)
@@ -237,30 +277,31 @@ export function TitleBar({
       searchWorkerRef.current = null
       setIsSearchWorkerReady(false)
       setIsSearching(false)
+      if (searchTimeoutRef.current !== null) {
+        window.clearTimeout(searchTimeoutRef.current)
+        searchTimeoutRef.current = null
+      }
       worker.terminate()
     }
   }, [isSearchOpen])
 
   useEffect(() => {
-    const worker = searchWorkerRef.current
-
-    if (!worker || !isSearchWorkerReady) {
-      return
-    }
-
-    worker.postMessage({
-      type: "set-files",
-      files,
-    })
-    runSearch(deferredSearchQuery)
-  }, [deferredSearchQuery, files, isSearchWorkerReady, runSearch])
+    sendFilesToWorker()
+  }, [sendFilesToWorker])
 
   useEffect(() => {
     if (!isSearchWorkerReady) {
       return
     }
 
-    runSearch(deferredSearchQuery)
+    // Debounce search to avoid running on every keystroke
+    if (searchDebounceRef.current !== null) {
+      window.clearTimeout(searchDebounceRef.current)
+    }
+    searchDebounceRef.current = window.setTimeout(() => {
+      searchDebounceRef.current = null
+      runSearch(deferredSearchQuery)
+    }, 150)
   }, [activeFileId, deferredSearchQuery, isSearchWorkerReady, runSearch])
 
   const displayLabel = activeFile?.filePath || activeFile?.name || "RadishMD"
@@ -333,7 +374,7 @@ export function TitleBar({
         return
       }
 
-      if (event.key === "ArrowDown") {
+      if (event.key === "ArrowDown" || event.key === "Tab") {
         event.preventDefault()
         setSelectedIndex((current) => (current + 1) % searchResults.length)
         return
@@ -421,7 +462,7 @@ export function TitleBar({
             }}
             className="w-[min(56rem,calc(100vw-1.5rem))] border-0 bg-transparent p-0 shadow-none"
           >
-            <div className="overflow-hidden rounded-xl border border-border/80 bg-card/95 shadow-2xl backdrop-blur-md">
+            <div className="rounded-xl border border-border/80 bg-card/95 shadow-2xl backdrop-blur-md">
               <div className="flex items-center gap-2 border-b border-border/70 px-3 py-2">
                 <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
                 <Input
@@ -439,7 +480,7 @@ export function TitleBar({
                 </KbdGroup>
               </div>
 
-              <ScrollArea className="max-h-72">
+              <div className="max-h-72 overflow-y-auto">
                 <div className="p-2">
                   {searchQuery.trim() === "" ? (
                     <div className="px-3 py-6 text-center text-sm text-muted-foreground">
@@ -457,14 +498,11 @@ export function TitleBar({
                     <div className="space-y-1">
                       {searchResults.map((result, index) => (
                         <button
-                          key={result.fileId}
+                          key={`${result.fileId}-${result.line}`}
                           type="button"
                           onClick={() => handleResultSelect(result)}
-                          onMouseEnter={() => setSelectedIndex(index)}
                           className={cn(
                             "w-full rounded-lg border border-transparent px-3 py-2 text-left transition-colors",
-                            "hover:border-border/70 hover:bg-accent/30",
-                            result.isActive && "border-border bg-accent/40",
                             index === selectedIndex && "border-border bg-accent/30"
                           )}
                         >
@@ -484,7 +522,7 @@ export function TitleBar({
                     </div>
                   )}
                 </div>
-              </ScrollArea>
+              </div>
             </div>
           </PopoverContent>
         </Popover>

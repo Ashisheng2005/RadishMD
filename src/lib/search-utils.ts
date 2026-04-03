@@ -34,20 +34,24 @@ function buildSnippet(lines: string[], lineIndex: number, query: string) {
   return snippet
 }
 
-function searchInContent(content: string, query: string) {
+function searchInContent(content: string, query: string, maxResults = 10) {
   const lines = content.split("\n")
   const queryPattern = new RegExp(escapeRegExp(query), "i")
+  const results: { line: number; content: string }[] = []
 
   for (let index = 0; index < lines.length; index += 1) {
     if (queryPattern.test(lines[index])) {
-      return {
+      results.push({
         line: index,
         content: buildSnippet(lines, index, query),
+      })
+      if (results.length >= maxResults) {
+        break
       }
     }
   }
 
-  return null
+  return results
 }
 
 function walkNodes(nodes: FileNode[], visitor: (node: FileNode) => void) {
@@ -101,42 +105,41 @@ export function searchCorpus(
     const filePath = file.filePath?.toLowerCase() ?? ""
     const content = file.content
 
-    let score = 0
+    let baseScore = 0
     let kind: FileSearchResult["kind"] = "content"
-    let line = 0
     let preview = ""
+    let isNameMatch = false
 
     if (name === normalizedQuery) {
-      score += 1000
+      baseScore += 1000
       kind = "name"
+      isNameMatch = true
       preview = file.filePath || file.fileName
     } else if (name.includes(normalizedQuery)) {
-      score += 700
+      baseScore += 700
       kind = "name"
+      isNameMatch = true
       preview = file.filePath || file.fileName
     }
 
     if (filePath.includes(normalizedQuery)) {
-      score += 400
+      baseScore += 400
       if (!preview) {
         preview = file.filePath || file.fileName
       }
     }
 
-    if (content) {
-      const matched = searchInContent(content, normalizedQuery)
+    // Get all content matches
+    const contentMatches = content ? searchInContent(content, normalizedQuery, 10) : []
 
-      if (matched) {
-        score += 250
-        if (kind !== "name") {
-          kind = "content"
-        }
-        line = matched.line
-        preview = matched.content
+    if (contentMatches.length > 0) {
+      baseScore += 250
+      if (!isNameMatch) {
+        kind = "content"
       }
     }
 
-    if (score === 0) {
+    if (baseScore === 0) {
       continue
     }
 
@@ -144,20 +147,35 @@ export function searchCorpus(
       preview = file.filePath || file.fileName
     }
 
-    if (file.fileId === activeFileId) {
-      score += 25
-    }
+    const activeBonus = file.fileId === activeFileId ? 25 : 0
 
-    results.push({
-      fileId: file.fileId,
-      fileName: file.fileName,
-      filePath: file.filePath,
-      line,
-      content: preview,
-      isActive: file.fileId === activeFileId,
-      score,
-      kind,
-    })
+    // Create a result for each content match
+    if (contentMatches.length > 0) {
+      for (const match of contentMatches) {
+        results.push({
+          fileId: file.fileId,
+          fileName: file.fileName,
+          filePath: file.filePath,
+          line: match.line,
+          content: match.content,
+          isActive: file.fileId === activeFileId,
+          score: baseScore + activeBonus,
+          kind,
+        })
+      }
+    } else {
+      // No content match, just create one result for name/path match
+      results.push({
+        fileId: file.fileId,
+        fileName: file.fileName,
+        filePath: file.filePath,
+        line: 0,
+        content: preview,
+        isActive: file.fileId === activeFileId,
+        score: baseScore + activeBonus,
+        kind,
+      })
+    }
   }
 
   return results.sort((left, right) => {
