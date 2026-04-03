@@ -13,6 +13,7 @@ export function SplitEditor() {
   const isSyncingScrollRef = useRef(false)
   const ignoreEditorScrollUntilRef = useRef(0)
   const ignorePreviewScrollUntilRef = useRef(0)
+  const countUpdateTimeoutRef = useRef<number | null>(null)
 
   const suppressScroll = useCallback((target: "editor" | "preview", duration = 180) => {
     const expiresAt = performance.now() + duration
@@ -65,8 +66,20 @@ export function SplitEditor() {
   }, [syncScrollPosition])
 
   useEffect(() => {
-    // Initialize word count
-    useEditorStore.getState().updateCounts(content)
+    // Debounced word count update to avoid O(n) operation on every keystroke
+    if (countUpdateTimeoutRef.current !== null) {
+      window.clearTimeout(countUpdateTimeoutRef.current)
+    }
+    countUpdateTimeoutRef.current = window.setTimeout(() => {
+      countUpdateTimeoutRef.current = null
+      useEditorStore.getState().updateCounts(content)
+    }, 300)
+
+    return () => {
+      if (countUpdateTimeoutRef.current !== null) {
+        window.clearTimeout(countUpdateTimeoutRef.current)
+      }
+    }
   }, [content])
 
   // Wrap selection in textarea with markdown syntax
