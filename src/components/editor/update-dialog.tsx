@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Download, ExternalLink, RefreshCw, CircleSlash2 } from "lucide-react"
+import { Download, ExternalLink, RefreshCw, CircleSlash2, FolderOpen } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
 import { Spinner } from "@/components/ui/spinner"
@@ -17,10 +17,12 @@ interface UpdateDialogProps {
   downloadingAsset: string | null
   downloadProgress: UpdateDownloadProgress | null
   cancellingDownload: boolean
+  downloadedAssets: Record<string, string>
   onOpenChange: (open: boolean) => void
   onCheckAgain: () => void
   onDownloadAsset: (asset: UpdateAsset) => Promise<void>
   onCancelDownload: () => void
+  onOpenAssetFolder: (assetName: string) => void
 }
 
 function formatBytes(bytes: number) {
@@ -47,10 +49,12 @@ export function UpdateDialog({
   downloadingAsset,
   downloadProgress,
   cancellingDownload,
+  downloadedAssets,
   onOpenChange,
   onCheckAgain,
   onDownloadAsset,
   onCancelDownload,
+  onOpenAssetFolder,
 }: UpdateDialogProps) {
   const releaseNotes = updateInfo?.release_notes?.trim() || "暂无 release note。"
   const hasAssets = Boolean(updateInfo?.assets.length)
@@ -172,6 +176,7 @@ export function UpdateDialog({
               <div className="grid gap-2 p-2">
                 {updateInfo?.assets.map((asset) => {
                   const isDownloading = downloadingAsset === asset.name
+                  const isDownloaded = Boolean(downloadedAssets[asset.name])
                   const progress = isDownloading ? downloadProgress?.progress : null
                   const downloadedBytes = isDownloading ? downloadProgress?.downloaded_bytes ?? 0 : 0
                   const totalBytes = isDownloading ? downloadProgress?.total_bytes ?? asset.size : asset.size
@@ -183,6 +188,7 @@ export function UpdateDialog({
                         "rounded-lg border bg-background p-3",
                         asset.is_preferred && "border-primary/40 bg-primary/5",
                         isDownloading && "border-primary/50 bg-primary/5",
+                        isDownloaded && "border-green-500/30 bg-green-500/5",
                       )}
                     >
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -191,6 +197,7 @@ export function UpdateDialog({
                             <div className="truncate font-medium">{asset.name}</div>
                             {asset.is_preferred && <Badge>推荐</Badge>}
                             {isDownloading && <Badge variant="secondary">下载中</Badge>}
+                            {isDownloaded && <Badge variant="default" className="bg-green-500/80 text-white">已下载</Badge>}
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {formatBytes(asset.size)}
@@ -199,10 +206,16 @@ export function UpdateDialog({
                             )}
                           </div>
                         </div>
-                        <Button type="button" size="sm" onClick={() => void onDownloadAsset(asset)} disabled={Boolean(downloadingAsset)}>
-                          {isDownloading ? <Spinner className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
-                          {isDownloading ? "下载中" : "下载"}
-                        </Button>
+                        {isDownloaded ? (
+                          <Button type="button" size="icon" variant="outline" onClick={() => onOpenAssetFolder(asset.name)}>
+                            <FolderOpen className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <Button type="button" size="sm" onClick={() => void onDownloadAsset(asset)} disabled={Boolean(downloadingAsset)}>
+                            {isDownloading ? <Spinner className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
+                            {isDownloading ? "下载中" : "下载"}
+                          </Button>
+                        )}
                       </div>
                       {isDownloading && (
                         <div className="mt-3 space-y-2">

@@ -11,7 +11,7 @@ import { Outline } from "./outline"
 import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
 import { UpdateDialog } from "./update-dialog"
-import { isTauriRuntime } from "@/lib/runtime"
+import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
 import {
   checkLatestRelease,
   cancelDownload,
@@ -41,6 +41,7 @@ export function Editor() {
   const [downloadingAsset, setDownloadingAsset] = useState<string | null>(null)
   const [downloadProgress, setDownloadProgress] = useState<UpdateDownloadProgress | null>(null)
   const [cancellingDownload, setCancellingDownload] = useState(false)
+  const [downloadedAssets, setDownloadedAssets] = useState<Record<string, string>>({})
   const activeDownloadIdRef = useRef<string | null>(null)
   const hasAutoCheckedUpdate = useRef(false)
   const handledOpenedFilePathsRef = useRef(new Set<string>())
@@ -163,6 +164,7 @@ export function Editor() {
     try {
       await downloadReleaseAsset(asset, savePath, downloadId)
       toast.success(`更新包已下载到 ${savePath}`)
+      setDownloadedAssets((prev) => ({ ...prev, [asset.name]: savePath }))
     } catch (error) {
       console.error("[RadishMD][update] download failed", error)
 
@@ -197,6 +199,15 @@ export function Editor() {
       console.error("[RadishMD][update] cancel failed", error)
       toast.error("取消下载失败")
       setCancellingDownload(false)
+    }
+  }
+
+  const handleOpenAssetFolder = (assetName: string) => {
+    const savePath = downloadedAssets[assetName]
+    if (savePath) {
+      const lastSlash = Math.max(savePath.lastIndexOf("/"), savePath.lastIndexOf("\\"))
+      const folderPath = lastSlash > 0 ? savePath.substring(0, lastSlash) : savePath
+      void openExternalTarget(folderPath)
     }
   }
 
@@ -455,10 +466,12 @@ export function Editor() {
         downloadingAsset={downloadingAsset}
         downloadProgress={downloadProgress}
         cancellingDownload={cancellingDownload}
+        downloadedAssets={downloadedAssets}
         onOpenChange={setUpdateDialogOpen}
         onCheckAgain={() => void checkForUpdates(true)}
         onDownloadAsset={handleDownloadAsset}
         onCancelDownload={() => void handleCancelDownload()}
+        onOpenAssetFolder={handleOpenAssetFolder}
       />
     </div>
   )

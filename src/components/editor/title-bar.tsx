@@ -154,6 +154,7 @@ export function TitleBar({
   const searchRequestIdRef = useRef(0)
   const searchTimeoutRef = useRef<number | null>(null)
   const searchDebounceRef = useRef<number | null>(null)
+  const selectedItemRef = useRef<HTMLButtonElement | null>(null)
 
   const activeFile = activeFileId ? findNodeById(activeFileId) : null
 
@@ -304,6 +305,13 @@ export function TitleBar({
     }, 150)
   }, [activeFileId, deferredSearchQuery, isSearchWorkerReady, runSearch])
 
+  // Scroll selected item into view when selection changes
+  useEffect(() => {
+    if (selectedItemRef.current) {
+      selectedItemRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" })
+    }
+  }, [selectedIndex])
+
   const displayLabel = activeFile?.filePath || activeFile?.name || "RadishMD"
   const updateStatusText =
     updateCheckState === "checking"
@@ -426,6 +434,34 @@ export function TitleBar({
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
+
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={toggleTheme}
+              >
+                {theme === "system" ? (
+                  <Monitor className="h-4 w-4" />
+                ) : theme === "dark" ? (
+                  <Sun className="h-4 w-4" />
+                ) : (
+                  <Moon className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              {theme === "system"
+                ? "自动主题（跟随系统）"
+                : theme === "dark"
+                  ? "浅色主题"
+                  : "深色主题"}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
       {/* Center - Search */}
@@ -499,6 +535,7 @@ export function TitleBar({
                       {searchResults.map((result, index) => (
                         <button
                           key={`${result.fileId}-${result.line}`}
+                          ref={index === selectedIndex ? selectedItemRef : null}
                           type="button"
                           onClick={() => handleResultSelect(result)}
                           className={cn(
@@ -530,34 +567,6 @@ export function TitleBar({
 
       {/* Right Controls */}
       <div className="flex items-center gap-1">
-        <TooltipProvider delayDuration={300}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7"
-                onClick={toggleTheme}
-              >
-                {theme === "system" ? (
-                  <Monitor className="h-4 w-4" />
-                ) : theme === "dark" ? (
-                  <Sun className="h-4 w-4" />
-                ) : (
-                  <Moon className="h-4 w-4" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs">
-              {theme === "system"
-                ? "自动主题（跟随系统）"
-                : theme === "dark"
-                  ? "浅色主题"
-                  : "深色主题"}
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
