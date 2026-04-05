@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
 import { parseTableMarkdownToHtml, renderInlineMarkdown } from "./utils"
+import { renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
 import type { Block } from "./types"
 
 interface BlockProps {
@@ -190,7 +191,7 @@ export function Block({
     }
 
     const htmlContent = block.type === "code"
-      ? normalizedContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")
+      ? renderCodeBlockInnerHtml(block.content, block.language)
       : renderInlineMarkdown(normalizedContent, baseFilePath) || "&nbsp;"
 
     return (

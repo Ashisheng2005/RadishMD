@@ -47,11 +47,12 @@ npm run tauri build    # Build production .exe
 - Markdown rendering with `markdown-render.ts`
 
 ### Split Editor Scroll Sync
-- Uses **dynamic delta-based scroll sync** (`split-editor.tsx`)
-- Syncs scroll delta instead of absolute position to prevent drift
-- Dynamic ratio calculated from `scrollHeight` ratio between editor and preview
-- Ratio clamped between 0.70 and 0.90 for stability
+- Uses **percentage-based scroll sync** (`split-editor.tsx`)
+- Syncs by scroll percentage (`scrollTop / scrollableHeight`) rather than delta
 - Uses `useDeferredValue` for smooth input during rendering
+- **ResizeObserver** monitors preview height changes and corrects sync when rendering stabilizes
+- Throttled at 50ms to avoid excessive recalculations during fast scrolling
+- This approach handles content height differences between editor (textarea) and preview (HTML) more accurately than delta-based sync
 
 ### Layout Structure
 ```

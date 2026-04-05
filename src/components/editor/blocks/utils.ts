@@ -75,7 +75,7 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       const language = line.slice(3).trim()
       const codeLines: string[] = []
       i++
-      while (i < lines.length && !lines[i].startsWith("```")) {
+      while (i < lines.length && !lines[i].trim().startsWith("```")) {
         codeLines.push(lines[i])
         i++
       }
