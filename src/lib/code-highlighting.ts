@@ -154,12 +154,14 @@ export function normalizeCodeLanguage(language?: string | null) {
 
 export function renderCodeBlockInnerHtml(content: string, language?: string | null) {
   const normalizedLanguage = normalizeLanguage(language)
+  // Normalize line endings: remove \r to prevent extra spacing with CRLF files
+  const normalizedContent = content.replace(/\r\n?/g, "\n")
 
   if (!normalizedLanguage) {
-    return escapeHtml(content).replace(/\n/g, "<br>")
+    return escapeHtml(normalizedContent).replace(/\n/g, "<br>")
   }
 
-  return content
+  return normalizedContent
     .split("\n")
     .map((line) => highlightLine(line, normalizedLanguage))
     .join("<br>")

@@ -84,24 +84,28 @@ function parseTableMarkdownToHtml(content: string) {
 }
 
 function renderPlainText(text: string) {
-  return escapeHtml(text).replace(/\n/g, "<br>")
+  return escapeHtml(text.replace(/\r\n?/g, "\n")).replace(/\n/g, "<br>")
 }
 
 function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
-  const lines = markdown.split("\n")
+  // Normalize line endings to handle CRLF files
+  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n")
+  const lines = normalizedMarkdown.split("\n")
   const blocks: MarkdownBlock[] = []
   let index = 0
 
   while (index < lines.length) {
     const line = lines[index]
 
-    if (line.startsWith("```") ) {
-      const language = line.slice(3).trim()
+    const trimmedLine = line.trim()
+
+    if (trimmedLine.startsWith("```")) {
+      const language = trimmedLine.slice(3).trim()
       const codeLines: string[] = []
       const sourceLine = index
       index += 1
 
-      while (index < lines.length && !lines[index].startsWith("```")) {
+      while (index < lines.length && !lines[index].trim().startsWith("```")) {
         codeLines.push(lines[index])
         index += 1
       }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
-import { renderInlineMarkdown } from "./utils"
+import { parseTableMarkdownToHtml, renderInlineMarkdown } from "./utils"
 import type { Block } from "./types"
 
 interface BlockProps {
@@ -178,9 +178,20 @@ export function Block({
     }
 
     // Render mode - use innerHTML for markdown rendering
+    const normalizedContent = localContent.replace(/\r\n?/g, "\n")
+
+    // Special handling for table blocks
+    if (block.type === "table") {
+      return (
+        <div
+          dangerouslySetInnerHTML={{ __html: parseTableMarkdownToHtml(normalizedContent) }}
+        />
+      )
+    }
+
     const htmlContent = block.type === "code"
-      ? localContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")
-      : renderInlineMarkdown(localContent, baseFilePath) || "&nbsp;"
+      ? normalizedContent.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, "<br>")
+      : renderInlineMarkdown(normalizedContent, baseFilePath) || "&nbsp;"
 
     return (
       <div

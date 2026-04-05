@@ -387,7 +387,7 @@ export function WysiwygEditor() {
         data-editor-scroll-container
         onClickCapture={handleRenderedContentClick}
       >
-        <div className="max-w-3xl mx-auto px-8 py-12">
+        <div className="max-w-3xl mx-auto px-8 py-12 space-y-2">
           {blocks.map((block) => (
             <div
               key={block.id}

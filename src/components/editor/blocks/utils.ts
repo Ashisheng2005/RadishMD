@@ -58,7 +58,9 @@ export function parseTableMarkdownToHtml(content: string) {
 }
 
 export function parseMarkdownToBlocks(markdown: string): Block[] {
-  const lines = markdown.split("\n")
+  // Normalize line endings to handle CRLF files
+  const normalizedMarkdown = markdown.replace(/\r\n?/g, "\n")
+  const lines = normalizedMarkdown.split("\n")
   const blocks: Block[] = []
   let i = 0
   let blockId = 0
@@ -256,7 +258,8 @@ export function blocksToMarkdown(blocks: Block[]): string {
 }
 
 export function renderInlineMarkdown(text: string, _baseFilePath?: string | null): string {
-  let result = text
+  // Normalize line endings first to prevent extra spacing with CRLF files
+  let result = text.replace(/\r\n?/g, "\n")
 
   // Don't escape HTML - let browser parse it as HTML
   // WYSIWYG mode uses textarea for editing, so no XSS risk from user input
