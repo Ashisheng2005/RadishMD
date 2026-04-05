@@ -11,6 +11,7 @@ import { Outline } from "./outline"
 import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
 import { UpdateDialog } from "./update-dialog"
+import { CloseConfirmDialog } from "./close-confirm-dialog"
 import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
 import {
   checkLatestRelease,
@@ -42,6 +43,8 @@ export function Editor() {
   const [downloadProgress, setDownloadProgress] = useState<UpdateDownloadProgress | null>(null)
   const [cancellingDownload, setCancellingDownload] = useState(false)
   const [downloadedAssets, setDownloadedAssets] = useState<Record<string, string>>({})
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
+  const [unsavedFilesForClose, setUnsavedFilesForClose] = useState<{ id: string; name: string }[]>([])
   const activeDownloadIdRef = useRef<string | null>(null)
   const hasAutoCheckedUpdate = useRef(false)
   const handledOpenedFilePathsRef = useRef(new Set<string>())
@@ -440,6 +443,42 @@ export function Editor() {
     }
   }, [])
 
+  // Handle window close confirmation
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return
+    }
+
+    let unlisten: (() => void) | null = null
+
+    void listen("radishmd://close-requested", () => {
+      const hasUnsaved = useEditorStore.getState().hasUnsavedChanges()
+
+      if (hasUnsaved) {
+        const unsaved = useEditorStore.getState().getUnsavedFiles()
+        setUnsavedFilesForClose(unsaved.map(f => ({ id: f.id, name: f.name })))
+        setCloseConfirmOpen(true)
+      } else {
+        void invoke("confirm_close")
+      }
+    }).then((dispose) => {
+      unlisten = dispose
+    })
+
+    return () => {
+      unlisten?.()
+    }
+  }, [])
+
+  const handleCloseConfirm = () => {
+    setCloseConfirmOpen(false)
+    void invoke("confirm_close")
+  }
+
+  const handleCloseCancel = () => {
+    setCloseConfirmOpen(false)
+  }
+
   return (
     <div
       className={cn(
@@ -472,6 +511,12 @@ export function Editor() {
         onDownloadAsset={handleDownloadAsset}
         onCancelDownload={() => void handleCancelDownload()}
         onOpenAssetFolder={handleOpenAssetFolder}
+      />
+      <CloseConfirmDialog
+        open={closeConfirmOpen}
+        unsavedFiles={unsavedFilesForClose}
+        onConfirm={handleCloseConfirm}
+        onCancel={handleCloseCancel}
       />
     </div>
   )

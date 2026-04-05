@@ -6,7 +6,7 @@ use std::sync::{atomic::{AtomicBool, Ordering}, Arc, LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::Emitter;
+use tauri::{Emitter, WindowEvent};
 use tauri::Manager;
 use tauri_plugin_cli::CliExt;
 use base64::{Engine as _, engine::general_purpose::STANDARD as base64_engine};
@@ -74,6 +74,8 @@ static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> = Laz
 static PENDING_OPENED_FILES: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| {
     Mutex::new(Vec::new())
 });
+
+static CLOSE_CONFIRMED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Default)]
 struct DownloadCancellationRegistry {
@@ -479,6 +481,14 @@ fn clear_file_watcher() -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+fn confirm_close(app: tauri::AppHandle) {
+    CLOSE_CONFIRMED.store(true, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.close();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -499,11 +509,28 @@ pub fn run() {
             download_release_asset,
             cancel_download,
             watch_file_changes,
-            clear_file_watcher
+            clear_file_watcher,
+            confirm_close
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();
             window.set_title("RadishMD").ok();
+
+            // Handle window close request to check for unsaved changes
+            let window_clone = window.clone();
+            window.on_window_event(move |event| {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    // If close was already confirmed, allow it
+                    if CLOSE_CONFIRMED.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    // Emit event to frontend to handle unsaved changes confirmation
+                    let _ = window_clone.emit("radishmd://close-requested", ());
+                    // Prevent automatic close - frontend will handle and call confirm_close
+                    api.prevent_close();
+                }
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())

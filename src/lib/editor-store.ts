@@ -14,6 +14,7 @@ export interface FileNode {
   sourceModified?: number | null
   isDirty?: boolean
   hasExternalChanges?: boolean
+  isNew?: boolean
 }
 
 interface FileSnapshot {
@@ -109,6 +110,8 @@ interface EditorState {
   saveFile: () => Promise<void>
   saveFileAs: () => Promise<void>
   openFileFromPath: (filePath: string) => Promise<void>
+  hasUnsavedChanges: () => boolean
+  getUnsavedFiles: () => FileNode[]
 }
 
 const initialFiles: FileNode[] = []
@@ -571,7 +574,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       type: creatingType,
       ...(creatingType === "folder"
         ? { isExpanded: false, children: [] }
-        : { content: "", hasExternalChanges: false }),
+        : { content: "", hasExternalChanges: false, isNew: true }),
     }
 
     set((state) => ({
@@ -666,6 +669,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           ...node,
           sourceModified: snapshot.modified,
           isDirty: false,
+          isNew: false,
             hasExternalChanges: false,
         })),
       }))
@@ -721,6 +725,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           content,
           sourceModified: snapshot.modified,
           isDirty: false,
+          isNew: false,
           hasExternalChanges: false,
         })),
       }))
@@ -775,6 +780,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             content,
             sourceModified: snapshot.modified,
             isDirty: false,
+            isNew: false,
             hasExternalChanges: false,
           })),
         }))
@@ -815,6 +821,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           ...node,
           sourceModified: snapshot.modified,
           isDirty: false,
+          isNew: false,
           hasExternalChanges: false,
         })),
       }))
@@ -891,6 +898,47 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         style: { backgroundColor: "#ef4444", color: "#fff" },
       })
     }
+  },
+
+  hasUnsavedChanges: () => {
+    const { files } = get()
+
+    const checkFiles = (nodes: FileNode[]): boolean => {
+      for (const node of nodes) {
+        if (node.type === "file") {
+          if (node.isNew || node.isDirty) {
+            return true
+          }
+        }
+        if (node.children && checkFiles(node.children)) {
+          return true
+        }
+      }
+      return false
+    }
+
+    return checkFiles(files)
+  },
+
+  getUnsavedFiles: () => {
+    const { files } = get()
+    const unsaved: FileNode[] = []
+
+    const collectFiles = (nodes: FileNode[]) => {
+      for (const node of nodes) {
+        if (node.type === "file") {
+          if (node.isNew || node.isDirty) {
+            unsaved.push(node)
+          }
+        }
+        if (node.children) {
+          collectFiles(node.children)
+        }
+      }
+    }
+
+    collectFiles(files)
+    return unsaved
   },
 }))
 

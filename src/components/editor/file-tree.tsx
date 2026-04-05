@@ -185,7 +185,7 @@ function FileTreeItem({
         <File className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="truncate">{node.name}</span>
       </button>
-      {node.isDirty ? (
+      {(node.isDirty || node.isNew) ? (
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -199,16 +199,21 @@ function FileTreeItem({
                 className={cn(
                   "absolute right-2 top-1/2 -translate-y-1/2",
                   "flex h-5 w-5 items-center justify-center rounded-full",
-                  "text-amber-200 hover:bg-amber-400/15 hover:text-amber-400",
+                  node.isDirty
+                    ? "text-amber-200 hover:bg-amber-400/15 hover:text-amber-400"
+                    : "text-blue-200 hover:bg-blue-400/15 hover:text-blue-400",
                   "transition-colors"
                 )}
-                aria-label="点击保存"
+                aria-label={node.isNew ? "新文件，点击保存" : "点击保存"}
               >
-                <span className="h-2.5 w-2.5 rounded-full bg-amber-300/70" />
+                <span className={cn(
+                  "h-2.5 w-2.5 rounded-full",
+                  node.isDirty ? "bg-amber-300/70" : "bg-blue-400/70"
+                )} />
               </button>
             </TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
-              <p>点击保存</p>
+              <p>{node.isNew ? "新文件，点击保存" : "点击保存"}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>

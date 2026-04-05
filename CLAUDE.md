@@ -32,24 +32,26 @@ npm run tauri build    # Build production .exe
 - **Tauri 2** with plugins: `opener`, `dialog`, `cli`
 - Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
 - Commands in `src-tauri/src/lib.rs`:
-  - `read_file(path)` - Read file contents
-  - `read_file_snapshot(path)` - Read file with modification timestamp
-  - `write_file(path, content)` - Write file
-  - `get_file_name(file_path)` - Extract filename
-  - `read_image_as_data_url(path)` - Read image file as base64 data URL
-  - `get_cli_file_path()` - Get CLI arg for file associations
+  - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`
+  - Image: `read_image_as_data_url`
+  - CLI: `get_cli_file_path` for file associations
   - File watching: `watch_file_changes`, `clear_file_watcher`
   - Updates: `check_latest_release`, `download_release_asset`, `cancel_download`
 
+### Editor Components
+- **CodeMirror 7** for syntax highlighting in split mode (`@codemirror/*` packages)
+- Custom block-based WYSIWYG editor with controlled inputs
+- Markdown rendering with `markdown-render.ts`
+
 ### Layout Structure
 ```
-TitleBar
+TitleBar (with menu, update dialog, window controls)
 ├── Sidebar (file tree, collapsible)
 ├── EditorArea
-│   ├── SplitEditor (textarea + preview)
+│   ├── SplitEditor (textarea + preview + CodeMirror)
 │   └── WysiwygEditor (block-based editor)
-└── Outline (markdown outline, collapsible)
-StatusBar
+├── Outline (markdown outline, collapsible)
+└── StatusBar
 ```
 
 ### WYSIWYG Editor Architecture (`wysiwyg-editor.tsx`)
@@ -81,8 +83,6 @@ The WYSIWYG editor uses a **component-based approach** with controlled inputs:
    - `parseImageReference()` - Parses markdown image syntax `![alt](src)`
    - Images use raw paths in both WYSIWYG and Split modes
 
-### State Management (`src/lib/editor-store.ts`)
-
 ```typescript
 interface EditorState {
   files: FileNode[]           // File tree with content and filePath
@@ -101,6 +101,11 @@ Key methods:
 ### File Operations (`src/lib/file-operations.ts`)
 - `importFiles()` - Uses Tauri dialog plugin to select .md files
 - File reads via `invoke("read_file")`, writes via `invoke("write_file")`
+
+### Additional Utilities
+- `src/lib/search-utils.ts` - Search functionality helpers
+- `src/lib/code-highlighting.ts` - Code syntax highlighting
+- `src/workers/` - Web workers for background processing
 
 ## Keyboard Shortcuts
 
@@ -139,15 +144,15 @@ Key methods:
 | `src/lib/editor-store.ts` | Zustand store - all editor state |
 | `src/lib/file-operations.ts` | File import via Tauri dialog |
 | `src/lib/image-utils.ts` | Image path resolution and tag building |
+| `src/lib/markdown-render.ts` | Markdown-to-HTML rendering |
 | `src/components/editor/index.tsx` | Main layout + global keyboard shortcuts |
-| `src/components/editor/editor-area.tsx` | Routes between Split/WYSIWYG modes |
+| `src/components/editor/title-bar.tsx` | Title bar with menu, update dialog, window controls |
+| `src/components/editor/split-editor.tsx` | Textarea + preview split view with CodeMirror |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
-| `src/components/editor/blocks/types.ts` | Block and BlockType definitions |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
-| `src/components/editor/split-editor.tsx` | Textarea + preview split view |
-| `src/components/editor/toolbar.tsx` | `FormatType` enum and formatting buttons |
-| `src-tauri/src/lib.rs` | Rust commands: read/write file |
+| `src/components/editor/update-dialog.tsx` | Update download and installation dialog |
+| `src-tauri/src/lib.rs` | Rust commands: file I/O, updates, CLI |
 | `src-tauri/tauri.conf.json` | App window, bundle, file associations |
 | `vite.config.ts` | Vite + Tailwind CSS 4 setup |
 | `src/index.css` | Theme CSS variables (light/dark) + editor styles |
