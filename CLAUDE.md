@@ -44,6 +44,7 @@ npm run tauri build    # Build production .exe
 ### Editor Components
 - **CodeMirror 7** for syntax highlighting in split mode (`@codemirror/*` packages)
 - Custom block-based WYSIWYG editor with controlled inputs
+- Code syntax highlighting via `code-highlighting.ts` (shared by split preview and WYSIWYG modes)
 - Markdown rendering with `markdown-render.ts`
 
 ### Split Editor Scroll Sync
@@ -73,7 +74,7 @@ The WYSIWYG editor uses a **component-based approach** with controlled inputs:
    - Block types: `paragraph`, `heading1-6`, `code`, `quote`, `list`, `ordered`, `task`, `hr`, `table`
 
 2. **Block Components** (`components/editor/blocks/`):
-   - `Block.tsx` - Unified block component with edit/render modes
+   - `Block.tsx` - Unified block component with edit/render modes (uses `renderCodeBlockInnerHtml` for code syntax highlighting)
    - `types.ts` - Block and BlockType definitions
    - `utils.ts` - parseMarkdownToBlocks, blocksToMarkdown, renderInlineMarkdown
 
