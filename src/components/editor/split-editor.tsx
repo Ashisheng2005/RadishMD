@@ -7,15 +7,18 @@ import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/im
 
 export function SplitEditor() {
   const { content, setContent, splitViewMode, tabSize } = useEditorStore()
-  const deferredContent = useDeferredValue(content)
+  const deferredContent = useDeferredValue(content) // 使用 useDeferredValue 降低渲染优先级，保持输入流畅
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
-  const isSyncingScrollRef = useRef(false)
-  const ignoreEditorScrollUntilRef = useRef(0)
-  const ignorePreviewScrollUntilRef = useRef(0)
-  const countUpdateTimeoutRef = useRef<number | null>(null)
+  const isSyncingScrollRef = useRef(false) // 标记是否正在执行滚动同步，防止循环触发
+  const ignoreEditorScrollUntilRef = useRef(0) // 忽略编辑器滚动事件的截止时间
+  const ignorePreviewScrollUntilRef = useRef(0) // 忽略预览区滚动事件的截止时间
+  const countUpdateTimeoutRef = useRef<number | null>(null) // 字数统计防抖定时器
+  const lastSyncTimeRef = useRef(0) // ResizeObserver 节流时间戳
+  const pendingSyncRef = useRef<{ source: HTMLElement; target: HTMLElement; targetType: "editor" | "preview" } | null>(null) // 待执行的同步任务
 
   const suppressScroll = useCallback((target: "editor" | "preview", duration = 180) => {
+    // 抑制目标区域的滚动事件，防止主被动滚动相互触发导致死循环或抖动
     const expiresAt = performance.now() + duration
 
     if (target === "editor") {
@@ -26,17 +29,30 @@ export function SplitEditor() {
     ignorePreviewScrollUntilRef.current = expiresAt
   }, [])
 
-  const syncScrollPosition = useCallback(
+  // Percentage-based scroll sync - syncs by scroll percentage instead of delta
+  // This ensures visual position alignment regardless of content height differences
+  const syncScrollByPercent = useCallback(
     (source: HTMLElement, target: HTMLElement, targetType: "editor" | "preview") => {
       if (isSyncingScrollRef.current) return
 
-      const sourceMaxScrollTop = source.scrollHeight - source.clientHeight
-      const targetMaxScrollTop = target.scrollHeight - target.clientHeight
-      const ratio = sourceMaxScrollTop > 0 ? source.scrollTop / sourceMaxScrollTop : 0
+      const sourceScrollable = source.scrollHeight - source.clientHeight
+      const targetScrollable = target.scrollHeight - target.clientHeight
+
+      // 仅当有可滚动内容时同步
+      if (sourceScrollable <= 0 || targetScrollable <= 0) return
+
+      // 计算源元素的滚动百分比
+      const sourcePercent = source.scrollTop / sourceScrollable
+
+      // 避免微小滚动导致抖动
+      if (Math.abs(sourcePercent) < 0.001) return
 
       isSyncingScrollRef.current = true
       suppressScroll(targetType)
-      target.scrollTop = targetMaxScrollTop > 0 ? ratio * targetMaxScrollTop : 0
+
+      // 将百分比应用到目标元素
+      const newScrollTop = sourcePercent * targetScrollable
+      target.scrollTop = Math.max(0, Math.min(newScrollTop, targetScrollable))
 
       requestAnimationFrame(() => {
         isSyncingScrollRef.current = false
@@ -45,6 +61,30 @@ export function SplitEditor() {
     [suppressScroll]
   )
 
+  // 处理 ResizeObserver 触发的同步（带节流）
+  const handleResizeSync = useCallback(() => {
+    const now = performance.now()
+    const THROTTLE_MS = 50 // 最多每 50ms 同步一次
+
+    if (now - lastSyncTimeRef.current < THROTTLE_MS) {
+      // 记录待执行的同步任务，供下次执行
+      const textarea = textareaRef.current
+      const preview = previewRef.current
+      if (textarea && preview) {
+        pendingSyncRef.current = { source: textarea, target: preview, targetType: "preview" }
+      }
+      return
+    }
+
+    lastSyncTimeRef.current = now
+
+    const textarea = textareaRef.current
+    const preview = previewRef.current
+    if (!textarea || !preview) return
+
+    syncScrollByPercent(textarea, preview, "preview")
+  }, [syncScrollByPercent])
+
   const handleEditorScroll = useCallback(() => {
     if (performance.now() < ignoreEditorScrollUntilRef.current) return
 
@@ -52,8 +92,8 @@ export function SplitEditor() {
     const preview = previewRef.current
     if (!textarea || !preview) return
 
-    syncScrollPosition(textarea, preview, "preview")
-  }, [syncScrollPosition])
+    syncScrollByPercent(textarea, preview, "preview")
+  }, [syncScrollByPercent])
 
   const handlePreviewScroll = useCallback(() => {
     if (performance.now() < ignorePreviewScrollUntilRef.current) return
@@ -62,11 +102,11 @@ export function SplitEditor() {
     const preview = previewRef.current
     if (!textarea || !preview) return
 
-    syncScrollPosition(preview, textarea, "editor")
-  }, [syncScrollPosition])
+    syncScrollByPercent(preview, textarea, "editor")
+  }, [syncScrollByPercent])
 
   useEffect(() => {
-    // Debounced word count update to avoid O(n) operation on every keystroke
+    // 使用防抖机制更新字数统计，避免每次按键输入都全量遍历计算
     if (countUpdateTimeoutRef.current !== null) {
       window.clearTimeout(countUpdateTimeoutRef.current)
     }
@@ -82,7 +122,38 @@ export function SplitEditor() {
     }
   }, [content])
 
-  // Wrap selection in textarea with markdown syntax
+  // 监听预览区高度变化，当渲染稳定时修正滚动位置
+  useEffect(() => {
+    const preview = previewRef.current
+    if (!preview) return
+
+    // 节流后的同步任务执行器
+    const executePendingSync = () => {
+      const pending = pendingSyncRef.current
+      if (pending) {
+        pendingSyncRef.current = null
+        const now = performance.now()
+        if (now - lastSyncTimeRef.current >= 50) {
+          lastSyncTimeRef.current = now
+          syncScrollByPercent(pending.source, pending.target, pending.targetType)
+        }
+      }
+    }
+
+    const observer = new ResizeObserver(() => {
+      handleResizeSync()
+      // 如果有待执行的同步任务，延迟执行
+      requestAnimationFrame(executePendingSync)
+    })
+
+    observer.observe(preview)
+
+    return () => {
+      observer.disconnect()
+    }
+  }, [handleResizeSync, syncScrollByPercent])
+
+  // 使用 Markdown 语法标记包裹文本框中选中的内容 (常用于加粗、斜体等)
   const wrapTextareaSelection = useCallback((before: string, after: string) => {
     const textarea = textareaRef.current
     if (!textarea) return
@@ -124,7 +195,7 @@ export function SplitEditor() {
     })
   }, [setContent])
 
-  // Format current line with line-level syntax
+  // 对当前行进行行级 Markdown 语法格式化 (例如转换标题、列表)
   const formatTextareaLine = useCallback((prefix: string, pattern: RegExp) => {
     const textarea = textareaRef.current
     if (!textarea) return
@@ -174,7 +245,7 @@ export function SplitEditor() {
     })
   }, [setContent])
 
-  // Insert text at cursor position
+  // 在光标所在位置插入文本，并处理链接和图片等快速插入的占位定位
   const insertTextAtCursor = useCallback((textToInsert: string, placeholder: string = "") => {
     const textarea = textareaRef.current
     if (!textarea) return
@@ -202,6 +273,7 @@ export function SplitEditor() {
     })
   }, [setContent])
 
+  // 处理粘贴事件，自动识别图片和 HTML 图源并转为 Markdown 语法
   const handleTextareaPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const html = event.clipboardData.getData("text/html")
     const text = event.clipboardData.getData("text/plain")
@@ -228,6 +300,7 @@ export function SplitEditor() {
     })
   }, [setContent])
 
+  // 处理文本框按键事件（核心处理 Tab/Shift+Tab 多行缩进的逻辑）
   const handleTextareaKeyDown = useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key !== "Tab") {
       return
@@ -328,7 +401,7 @@ export function SplitEditor() {
     })
   }, [setContent])
 
-  // Handle format button clicks
+  // 处理工具栏等按钮触发的各种格式化操作
   const handleFormat = useCallback((type: FormatType) => {
     switch (type) {
       case "bold":
@@ -404,7 +477,7 @@ export function SplitEditor() {
     }
   }, [wrapTextareaSelection, formatTextareaLine, insertTextAtCursor, setContent])
 
-  // Keyboard shortcuts for split mode
+  // 注册分栏模式与全局快捷键 (例如加粗/标题/引用等 Ctrl/Cmd + ...)
   useEffect(() => {
     if (splitViewMode === "render") {
       return

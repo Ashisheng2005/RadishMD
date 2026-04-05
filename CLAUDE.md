@@ -9,13 +9,13 @@ RadishMD is a Tauri 2 desktop application with a React + TypeScript frontend. It
 ## Commands
 
 ```bash
-# Frontend only (port 1420)
-npm run dev        # Start Vite dev server
+# Frontend only
+npm run dev        # Start Vite dev server (port 1420)
 npm run build      # TypeScript check + Vite build
 npm run preview    # Preview built frontend
 
 # Tauri (full app)
-npm run tauri dev      # Run with Rust backend + frontend
+npm run tauri dev      # Run with Rust backend + frontend (port 1421 for HMR)
 npm run tauri build    # Build production .exe
 ```
 
@@ -30,6 +30,8 @@ npm run tauri build    # Build production .exe
 
 ### Backend (Rust)
 - **Tauri 2** with plugins: `opener`, `dialog`, `cli`
+- **File watching**: Uses `notify` crate to watch for external file changes, emits `radishmd://file-changed` events to frontend
+- **Update downloads**: Uses `reqwest` blocking client with cancellation support via `DownloadCancellationRegistry`
 - Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
 - Commands in `src-tauri/src/lib.rs`:
   - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`
@@ -37,11 +39,19 @@ npm run tauri build    # Build production .exe
   - CLI: `get_cli_file_path` for file associations
   - File watching: `watch_file_changes`, `clear_file_watcher`
   - Updates: `check_latest_release`, `download_release_asset`, `cancel_download`
+  - Window: `confirm_close` - Closes window after user confirms unsaved changes
 
 ### Editor Components
 - **CodeMirror 7** for syntax highlighting in split mode (`@codemirror/*` packages)
 - Custom block-based WYSIWYG editor with controlled inputs
 - Markdown rendering with `markdown-render.ts`
+
+### Split Editor Scroll Sync
+- Uses **dynamic delta-based scroll sync** (`split-editor.tsx`)
+- Syncs scroll delta instead of absolute position to prevent drift
+- Dynamic ratio calculated from `scrollHeight` ratio between editor and preview
+- Ratio clamped between 0.70 and 0.90 for stability
+- Uses `useDeferredValue` for smooth input during rendering
 
 ### Layout Structure
 ```
@@ -84,12 +94,18 @@ The WYSIWYG editor uses a **component-based approach** with controlled inputs:
    - Images use raw paths in both WYSIWYG and Split modes
 
 ```typescript
-interface EditorState {
-  files: FileNode[]           // File tree with content and filePath
-  activeFileId: string | null
-  content: string             // Current file's markdown content
-  editMode: "split" | "wysiwyg"
-  // ...
+interface FileNode {
+  id: string
+  name: string
+  type: "file" | "folder"
+  children?: FileNode[]
+  content?: string
+  isExpanded?: boolean
+  filePath?: string
+  sourceModified?: number | null
+  isDirty?: boolean          // Modified after save
+  isNew?: boolean            // Created in-page, never saved
+  hasExternalChanges?: boolean
 }
 ```
 
@@ -97,6 +113,8 @@ Key methods:
 - `saveFile()` - Direct save for files with `filePath`, Save As for new files
 - `openFileFromPath(filePath)` - Opens file via CLI file association
 - `setContent(content)` - Updates content and triggers `updateCounts()`
+- `hasUnsavedChanges()` - Check if any file has unsaved changes
+- `getUnsavedFiles()` - Get list of files with unsaved changes
 
 ### File Operations (`src/lib/file-operations.ts`)
 - `importFiles()` - Uses Tauri dialog plugin to select .md files
@@ -141,18 +159,28 @@ Key methods:
 
 | File | Purpose |
 |------|---------|
+| `src/main.tsx` | App entry point, close event handling |
 | `src/lib/editor-store.ts` | Zustand store - all editor state |
 | `src/lib/file-operations.ts` | File import via Tauri dialog |
 | `src/lib/image-utils.ts` | Image path resolution and tag building |
 | `src/lib/markdown-render.ts` | Markdown-to-HTML rendering |
+| `src/lib/search-utils.ts` | Search functionality helpers |
 | `src/components/editor/index.tsx` | Main layout + global keyboard shortcuts |
+| `src/components/editor/editor-area.tsx` | Editor area container |
+| `src/components/editor/sidebar.tsx` | File tree sidebar container |
+| `src/components/editor/file-tree.tsx` | File tree with drag-drop support |
 | `src/components/editor/title-bar.tsx` | Title bar with menu, update dialog, window controls |
-| `src/components/editor/split-editor.tsx` | Textarea + preview split view with CodeMirror |
+| `src/components/editor/split-editor.tsx` | Split view with dynamic delta scroll sync |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
+| `src/components/editor/close-confirm-dialog.tsx` | Close confirmation for unsaved changes |
 | `src/components/editor/update-dialog.tsx` | Update download and installation dialog |
-| `src-tauri/src/lib.rs` | Rust commands: file I/O, updates, CLI |
+| `src/components/editor/outline.tsx` | Markdown outline/toc |
+| `src/components/editor/status-bar.tsx` | Status bar with word/char counts |
+| `src/workers/markdown-render-worker.ts` | Web worker for markdown rendering |
+| `src-tauri/src/lib.rs` | Rust commands: file I/O, updates, CLI, window close |
+| `src-tauri/src/main.rs` | Rust entry point |
 | `src-tauri/tauri.conf.json` | App window, bundle, file associations |
 | `vite.config.ts` | Vite + Tailwind CSS 4 setup |
 | `src/index.css` | Theme CSS variables (light/dark) + editor styles |
