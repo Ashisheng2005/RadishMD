@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/image-utils"
 
 export function SplitEditor() {
-  const { content, setContent, splitViewMode, tabSize } = useEditorStore()
+  const { content, setContent, splitViewMode, tabSize, contentType } = useEditorStore()
   const deferredContent = useDeferredValue(content) // 使用 useDeferredValue 降低渲染优先级，保持输入流畅
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
@@ -602,11 +602,19 @@ export function SplitEditor() {
             </div>
             <div
               ref={previewRef}
-              onScroll={handlePreviewScroll}
+              onScroll={contentType === "markdown" ? handlePreviewScroll : undefined}
               className="flex-1 overflow-y-auto p-6 bg-background"
               style={{ overflowAnchor: "none" }}
             >
-              <MarkdownRenderer content={deferredContent} />
+              {contentType === "pdf" ? (
+                <embed
+                  src={content}
+                  type="application/pdf"
+                  className="w-full h-full min-h-[80vh]"
+                />
+              ) : (
+                <MarkdownRenderer content={deferredContent} />
+              )}
             </div>
           </div>
         )}

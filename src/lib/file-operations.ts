@@ -1,4 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog"
+import { invoke } from "@tauri-apps/api/core"
 import { normalizeFilePath, readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
 
 const textFileExtensions = [
@@ -41,6 +42,7 @@ export async function importFiles(): Promise<void> {
     filters: [
       { name: "Text and Markdown", extensions: textFileExtensions },
       { name: "Markdown", extensions: ["md", "markdown"] },
+      { name: "PDF", extensions: ["pdf"] },
       { name: "JSON", extensions: ["json", "jsonc"] },
     ],
   })
@@ -83,7 +85,18 @@ export async function importFiles(): Promise<void> {
       continue
     }
 
-    const { content, modified } = await readFileSnapshot(normalizedFilePath)
+    const isPdf = normalizedFilePath.toLowerCase().endsWith(".pdf")
+    let content: string
+    let modified: number | null = null
+
+    if (isPdf) {
+      content = await invoke<string>("read_file_as_data_url", { path: normalizedFilePath })
+    } else {
+      const snapshot = await readFileSnapshot(normalizedFilePath)
+      content = snapshot.content
+      modified = snapshot.modified
+    }
+
     const name = normalizedFilePath.split(/[\\/]/).pop() || normalizedFilePath
     const newFile: FileNode = {
       id: `import-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,

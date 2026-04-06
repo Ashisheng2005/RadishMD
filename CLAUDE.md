@@ -17,7 +17,22 @@ npm run preview    # Preview built frontend
 # Tauri (full app)
 npm run tauri dev      # Run with Rust backend + frontend (port 1421 for HMR)
 npm run tauri build    # Build production .exe
+
+# Version management (auto-runs before build/dev)
+npm run version:sync   # Sync version to tauri.conf.json and Cargo.toml
+npm run version:check  # Check if versions are in sync
+
+# Release notes (generates from conventional commits)
+npm run release:notes  # Generate release notes between tags
 ```
+
+## Environment Requirements
+
+- **Node.js**: 18+
+- **Rust**: 1.70+
+- **Linux**: `build-essential`, `libwebkit2gtk-4.1-dev`, `libssl-dev`
+- **Windows**: Visual Studio Build Tools with MSVC target
+- **macOS**: Xcode Command Line Tools
 
 ## Architecture
 
@@ -111,12 +126,13 @@ interface FileNode {
 }
 ```
 
-Key methods:
+Key store methods:
 - `saveFile()` - Direct save for files with `filePath`, Save As for new files
 - `openFileFromPath(filePath)` - Opens file via CLI file association
 - `setContent(content)` - Updates content and triggers `updateCounts()`
 - `hasUnsavedChanges()` - Check if any file has unsaved changes
 - `getUnsavedFiles()` - Get list of files with unsaved changes
+- `watchFileChanges(filePath)` / `clearFileWatcher()` - File watching via Rust backend
 
 ### File Operations (`src/lib/file-operations.ts`)
 - `importFiles()` - Uses Tauri dialog plugin to select .md files
@@ -186,3 +202,10 @@ Key methods:
 | `src-tauri/tauri.conf.json` | App window, bundle, file associations |
 | `vite.config.ts` | Vite + Tailwind CSS 4 setup |
 | `src/index.css` | Theme CSS variables (light/dark) + editor styles |
+
+## Additional Documentation
+
+Detailed documentation in Chinese available in `docx/`:
+- `docx/使用手册.md` - User manual
+- `docx/开发者手册.md` - Developer guide with environment setup
+- `docx/Split模式滚动同步方案.md` - Split mode scroll sync implementation details

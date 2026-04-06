@@ -72,12 +72,14 @@ interface EditorState {
   theme: "light" | "dark" | "system"
   editMode: "split" | "wysiwyg"
   splitViewMode: "split" | "editor" | "render"
+  contentType: "markdown" | "pdf"
   tabSize: 4 | 6 | 8
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
   setActiveFile: (id: string) => Promise<void>
   setContent: (content: string) => void
+  setContentType: (type: "markdown" | "pdf") => void
   openSearch: () => void
   closeSearch: () => void
   toggleSearch: () => void
@@ -210,6 +212,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   theme: "system",
   editMode: "split",
   splitViewMode: "split",
+  contentType: "markdown",
   tabSize: getInitialTabSize(),
   wordCount: 0,
   charCount: 0,
@@ -226,8 +229,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       })
       set({ activeFileId: id })
 
+      const isPdf = file.filePath?.toLowerCase().endsWith(".pdf") ?? false
+
       if (file.filePath) {
         try {
+          if (isPdf) {
+            const dataUrl = await invoke<string>("read_file_as_data_url", { path: file.filePath })
+            set({ content: dataUrl, contentType: "pdf", splitViewMode: "render" })
+            get().updateCounts("")
+            return
+          }
+
           const snapshot = await readFileSnapshot(file.filePath)
           if (get().activeFileId !== id) {
             return
@@ -254,7 +266,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               }))
 
               const currentContent = file.content || ""
-              set({ content: currentContent })
+              set({ content: currentContent, contentType: "markdown" })
               get().updateCounts(currentContent)
               return
             }
@@ -272,7 +284,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 hasExternalChanges: false,
               })),
             }))
-            set({ content: snapshot.content })
+            set({ content: snapshot.content, contentType: "markdown" })
             get().updateCounts(snapshot.content)
             return
           }
@@ -294,8 +306,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         fileName: file.name,
         contentLength: currentContent.length,
       })
-      set({ content: currentContent })
-      get().updateCounts(currentContent)
+      set({ content: currentContent, contentType: isPdf ? "pdf" : "markdown", splitViewMode: isPdf ? "render" : get().splitViewMode })
+      get().updateCounts(isPdf ? "" : currentContent)
     }
   },
 
@@ -313,6 +325,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ content })
     get().updateCounts(content)
   },
+
+  setContentType: (type: "markdown" | "pdf") => set({ contentType: type }),
 
   openSearch: () => set({ isSearchOpen: true }),
   closeSearch: () => set({ isSearchOpen: false }),
@@ -411,15 +425,23 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return
     }
 
+    const isPdf = file.filePath?.toLowerCase().endsWith(".pdf") ?? false
     const currentContent = file.content || ""
+
     debugEditorLog("activateFileById", {
       id,
       fileName: file.name,
       filePath: file.filePath,
       contentLength: currentContent.length,
+      isPdf,
     })
 
-    set({ activeFileId: id, content: currentContent })
+    set({
+      activeFileId: id,
+      content: currentContent,
+      contentType: isPdf ? "pdf" : "markdown",
+      splitViewMode: isPdf ? "render" : get().splitViewMode,
+    })
     get().updateCounts(currentContent)
   },
 
@@ -847,7 +869,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     try {
       const normalizedFilePath = normalizeFilePath(filePath)
       debugEditorLog("openFileFromPath:start", { filePath: normalizedFilePath, files: summarizeFiles(get().files) })
-      const snapshot = await readFileSnapshot(normalizedFilePath)
+
+      const isPdf = normalizedFilePath.toLowerCase().endsWith(".pdf")
       const fileName = await invoke<string>("get_file_name", { filePath: normalizedFilePath })
       const existingFile = get().findNodeByPath(normalizedFilePath)
 
@@ -864,25 +887,39 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         return
       }
 
+      let content: string
+      let sourceModified: number | null = null
+
+      if (isPdf) {
+        content = await invoke<string>("read_file_as_data_url", { path: normalizedFilePath })
+        set({ contentType: "pdf", splitViewMode: "render" })
+      } else {
+        const snapshot = await readFileSnapshot(normalizedFilePath)
+        content = snapshot.content
+        sourceModified = snapshot.modified
+        set({ contentType: "markdown" })
+      }
+
       const newFile: FileNode = {
         id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         name: fileName,
         type: "file",
-        content: snapshot.content,
+        content,
         filePath: normalizedFilePath,
-        sourceModified: snapshot.modified,
+        sourceModified,
         isDirty: false,
         hasExternalChanges: false,
       }
 
       set((state) => ({ files: [...state.files, newFile] }))
-      set({ activeFileId: newFile.id, content: snapshot.content })
-      get().updateCounts(snapshot.content)
+      set({ activeFileId: newFile.id, content })
+      get().updateCounts(isPdf ? "" : content)
 
       debugEditorLog("openFileFromPath:new-file", {
         filePath: normalizedFilePath,
         fileName,
         newFileId: newFile.id,
+        isPdf,
         files: summarizeFiles(get().files),
       })
 

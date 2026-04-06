@@ -160,6 +160,28 @@ fn read_image_as_data_url(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_file_as_data_url(path: String) -> Result<String, String> {
+    let data = fs::read(&path).map_err(|e| e.to_string())?;
+    let mime = if path.ends_with(".pdf") {
+        "application/pdf"
+    } else if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".ico") {
+        "image/x-icon"
+    } else {
+        "application/octet-stream"
+    };
+    let base64 = base64_engine.encode(&data);
+    Ok(format!("data:{};base64,{}", mime, base64))
+}
+
+#[tauri::command]
 fn get_cli_file_path(app: tauri::AppHandle) -> Option<String> {
     let cli = app.cli();
     let matches = cli.matches().ok()?;
@@ -502,6 +524,7 @@ pub fn run() {
             write_file,
             get_file_name,
             read_image_as_data_url,
+            read_file_as_data_url,
             get_cli_file_path,
             take_opened_files,
             get_app_version,
