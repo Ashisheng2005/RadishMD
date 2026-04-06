@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import { invoke } from "@tauri-apps/api/core"
+import { invoke, convertFileSrc } from "@tauri-apps/api/core"
 import { save } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
 
@@ -234,8 +234,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       if (file.filePath) {
         try {
           if (isPdf) {
-            const dataUrl = await invoke<string>("read_file_as_data_url", { path: file.filePath })
-            set({ content: dataUrl, contentType: "pdf", splitViewMode: "render" })
+            const url = convertFileSrc(file.filePath)
+            set({ content: url, contentType: "pdf", splitViewMode: "render", isSidebarOpen: false, isOutlineOpen: false })
             get().updateCounts("")
             return
           }
@@ -426,7 +426,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     const isPdf = file.filePath?.toLowerCase().endsWith(".pdf") ?? false
-    const currentContent = file.content || ""
+    // For PDFs, generate asset URL; otherwise use stored content
+    const currentContent = isPdf && file.filePath ? convertFileSrc(file.filePath) : (file.content || "")
 
     debugEditorLog("activateFileById", {
       id,
@@ -441,6 +442,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       content: currentContent,
       contentType: isPdf ? "pdf" : "markdown",
       splitViewMode: isPdf ? "render" : get().splitViewMode,
+      ...(isPdf && { isSidebarOpen: false, isOutlineOpen: false }),
     })
     get().updateCounts(currentContent)
   },
@@ -891,8 +893,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       let sourceModified: number | null = null
 
       if (isPdf) {
-        content = await invoke<string>("read_file_as_data_url", { path: normalizedFilePath })
-        set({ contentType: "pdf", splitViewMode: "render" })
+        content = convertFileSrc(normalizedFilePath)
+        set({ contentType: "pdf", splitViewMode: "render", isSidebarOpen: false, isOutlineOpen: false })
       } else {
         const snapshot = await readFileSnapshot(normalizedFilePath)
         content = snapshot.content

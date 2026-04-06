@@ -42,6 +42,7 @@ npm run release:notes  # Generate release notes between tags
 - **shadcn/ui** component library (radix-ui primitives)
 - **Zustand** for state management
 - **sonner** for toast notifications
+- **pdfjs-dist** for PDF rendering (可选，当前主要用 WebView 内置渲染)
 
 ### Backend (Rust)
 - **Tauri 2** with plugins: `opener`, `dialog`, `cli`
@@ -49,12 +50,18 @@ npm run release:notes  # Generate release notes between tags
 - **Update downloads**: Uses `reqwest` blocking client with cancellation support via `DownloadCancellationRegistry`
 - Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
 - Commands in `src-tauri/src/lib.rs`:
-  - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`
+  - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`, `read_file_as_data_url`
   - Image: `read_image_as_data_url`
   - CLI: `get_cli_file_path` for file associations
   - File watching: `watch_file_changes`, `clear_file_watcher`
   - Updates: `check_latest_release`, `download_release_asset`, `cancel_download`
   - Window: `confirm_close` - Closes window after user confirms unsaved changes
+
+### Asset Protocol
+- **Tauri asset protocol** enabled in `tauri.conf.json` for streaming local files
+- `convertFileSrc(path)` from `@tauri-apps/api/core` generates `asset://localhost/<path>` URLs
+- Used for PDF viewing - WebView natively streams and renders PDFs via `<embed src={assetUrl}>`
+- Bypasses WebView's `file://` security restrictions
 
 ### Editor Components
 - **CodeMirror 7** for syntax highlighting in split mode (`@codemirror/*` packages)
@@ -135,7 +142,7 @@ Key store methods:
 - `watchFileChanges(filePath)` / `clearFileWatcher()` - File watching via Rust backend
 
 ### File Operations (`src/lib/file-operations.ts`)
-- `importFiles()` - Uses Tauri dialog plugin to select .md files
+- `importFiles()` - Uses Tauri dialog plugin to select .md/.pdf files; PDFs use `convertFileSrc` for streaming
 - File reads via `invoke("read_file")`, writes via `invoke("write_file")`
 
 ### Additional Utilities
@@ -171,6 +178,7 @@ Key store methods:
 - App ID: `radishtools.radishmd.fun`
 - Window: 1200x800 default, 800x600 minimum, decorated
 - File associations: `.md` files open with RadishMD
+- Asset protocol: enabled with `scope: ["**"]` for PDF streaming
 - Permissions: `src-tauri/capabilities/default.json`
 
 ## Key Files
@@ -192,6 +200,7 @@ Key store methods:
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
+| `src/components/editor/pdf-renderer.tsx` | PDF.js renderer (备用，当前使用原生 embed) |
 | `src/components/editor/close-confirm-dialog.tsx` | Close confirmation for unsaved changes |
 | `src/components/editor/update-dialog.tsx` | Update download and installation dialog |
 | `src/components/editor/outline.tsx` | Markdown outline/toc |

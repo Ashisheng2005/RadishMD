@@ -1,5 +1,5 @@
 import { open } from "@tauri-apps/plugin-dialog"
-import { invoke } from "@tauri-apps/api/core"
+import { convertFileSrc } from "@tauri-apps/api/core"
 import { normalizeFilePath, readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
 
 const textFileExtensions = [
@@ -90,7 +90,7 @@ export async function importFiles(): Promise<void> {
     let modified: number | null = null
 
     if (isPdf) {
-      content = await invoke<string>("read_file_as_data_url", { path: normalizedFilePath })
+      content = convertFileSrc(normalizedFilePath)
     } else {
       const snapshot = await readFileSnapshot(normalizedFilePath)
       content = snapshot.content
@@ -138,7 +138,7 @@ export async function importFiles(): Promise<void> {
       }) ??
       null
 
-    if (activationTargetPath && shouldUseEditorOnlyMode(activationTargetPath)) {
+    if (activationTargetPath && shouldUseEditorOnlyMode(activationTargetPath) && !activationTargetPath.toLowerCase().endsWith(".pdf")) {
       store.setEditMode("split")
       store.setSplitViewMode("editor")
     }

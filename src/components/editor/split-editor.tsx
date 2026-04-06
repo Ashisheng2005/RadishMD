@@ -63,6 +63,10 @@ export function SplitEditor() {
 
   // 处理 ResizeObserver 触发的同步（带节流）
   const handleResizeSync = useCallback(() => {
+    // PDF 模式下跳过滚动同步，避免闪烁
+    const { contentType: ct } = useEditorStore.getState()
+    if (ct === "pdf") return
+
     const now = performance.now()
     const THROTTLE_MS = 50 // 最多每 50ms 同步一次
 
@@ -86,6 +90,9 @@ export function SplitEditor() {
   }, [syncScrollByPercent])
 
   const handleEditorScroll = useCallback(() => {
+    // PDF 模式下跳过滚动同步
+    const { contentType: ct, splitViewMode: svm } = useEditorStore.getState()
+    if (ct === "pdf" || svm === "render") return
     if (performance.now() < ignoreEditorScrollUntilRef.current) return
 
     const textarea = textareaRef.current
@@ -607,11 +614,13 @@ export function SplitEditor() {
               style={{ overflowAnchor: "none" }}
             >
               {contentType === "pdf" ? (
-                <embed
-                  src={content}
-                  type="application/pdf"
-                  className="w-full h-full min-h-[80vh]"
-                />
+                <div className="min-h-[80vh]">
+                  <embed
+                    src={content}
+                    type="application/pdf"
+                    className="w-full h-[80vh]"
+                  />
+                </div>
               ) : (
                 <MarkdownRenderer content={deferredContent} />
               )}
