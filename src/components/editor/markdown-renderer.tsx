@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
 import katex from "katex"
 import "katex/dist/katex.min.css"
+import mermaid from "mermaid"
 
 function escapeHtml(value: string) {
   return value
@@ -37,6 +38,86 @@ function renderMathInHtml(html: string): string {
   return html
 }
 
+// Initialize mermaid with theme based on dark mode
+let mermaidInitialized = false
+function ensureMermaidInitialized() {
+  if (mermaidInitialized) return
+  const isDark = document.documentElement.classList.contains("dark")
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: isDark ? "dark" : "base",
+    themeVariables: isDark
+      ? {
+          primaryColor: "#6c47ff",
+          primaryTextColor: "#fff",
+          primaryBorderColor: "#555",
+          lineColor: "#888",
+          secondaryColor: "#555",
+          tertiaryColor: "#333",
+          background: "#1a1a1a",
+          mainBkg: "#2d2d2d",
+          secondBkg: "#3d3d3d",
+          border1: "#555",
+          border2: "#666",
+          arrowheadColor: "#888",
+          fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        }
+      : {
+          primaryColor: "#6c47ff",
+          primaryTextColor: "#1a1a1a",
+          primaryBorderColor: "#ccc",
+          lineColor: "#333",
+          secondaryColor: "#f0f0f0",
+          tertiaryColor: "#fff",
+          background: "#ffffff",
+          mainBkg: "#f8f8f8",
+          secondBkg: "#f0f0f0",
+          border1: "#e0e0e0",
+          border2: "#d0d0d0",
+          arrowheadColor: "#333",
+          fontFamily: "ui-sans-serif, system-ui, sans-serif",
+        },
+  })
+  mermaidInitialized = true
+}
+
+// Renders mermaid placeholders in DOM after HTML is set
+async function renderMermaidInContainer(container: HTMLElement) {
+  const mermaidDivs = container.querySelectorAll(".mermaid-diagram")
+  if (mermaidDivs.length === 0) return
+
+  ensureMermaidInitialized()
+
+  // Update theme if dark mode changed
+  const isDark = document.documentElement.classList.contains("dark")
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: isDark ? "dark" : "base",
+  })
+
+  const renders: Promise<void>[] = []
+  mermaidDivs.forEach((div) => {
+    const id = div.getAttribute("data-mermaid-id")
+    const content = div.getAttribute("data-mermaid-content")
+    if (!id || !content) return
+
+    const encodedContent = decodeURIComponent(content)
+    renders.push(
+      mermaid
+        .render(id, encodedContent)
+        .then(({ svg }) => {
+          div.innerHTML = svg
+        })
+        .catch((err) => {
+          console.error("[RadishMD] mermaid render error", err)
+          div.innerHTML = `<pre class="text-red-500 whitespace-pre-wrap">${escapeHtml(encodedContent)}</pre>`
+        })
+    )
+  })
+
+  await Promise.all(renders)
+}
+
 interface MarkdownRendererProps {
   content: string
   className?: string
@@ -57,6 +138,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     activeFilePath: null,
   })
   const lastActiveFileIdRef = useRef<string | null>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const activeFilePath = useEditorStore((state) => {
     if (!state.activeFileId) {
       return null
@@ -64,6 +146,16 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
     return state.findNodeById(state.activeFileId)?.filePath ?? null
   })
+
+  // Render mermaid diagrams after chunks are set in DOM
+  useEffect(() => {
+    if (!contentRef.current) return
+    const container = contentRef.current
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      renderMermaidInContainer(container)
+    })
+  }, [renderedChunks])
 
   const enqueueChunkRender = useCallback(
     (_requestId: number, chunks: MarkdownRenderChunk[]) => {
@@ -257,6 +349,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   return (
     <>
       <div
+        ref={contentRef}
         className={cn(
           "prose prose-sm max-w-none",
           "prose-headings:text-foreground prose-p:text-foreground",

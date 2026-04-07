@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { parseTableMarkdownToHtml, renderInlineMarkdown } from "./utils"
 import { renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
 import type { Block } from "./types"
+import mermaid from "mermaid"
 
 interface BlockProps {
   block: Block
@@ -31,6 +32,8 @@ export function Block({
   const [localContent, setLocalContent] = useState(block.content)
   const debounceRef = useRef<number | null>(null)
   const contentRef = useRef(block.content)
+  // Mermaid rendering state
+  const [mermaidSvg, setMermaidSvg] = useState<string>("")
 
   // Sync local content when block content changes externally
   useEffect(() => {
@@ -65,6 +68,29 @@ export function Block({
       }
     }
   }, [onUpdate])
+
+  // Render mermaid diagram when in view mode
+  useEffect(() => {
+    if (block.type !== "mermaid" || isEditing) return
+
+    const isDark = document.documentElement.classList.contains("dark")
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: isDark ? "dark" : "base",
+    })
+
+    const chartId = `mermaid-wysiwyg-${block.id}`
+
+    mermaid
+      .render(chartId, block.content)
+      .then((result) => {
+        setMermaidSvg(result.svg)
+      })
+      .catch((err) => {
+        console.error("[RadishMD] mermaid render error:", err)
+        setMermaidSvg(`<pre class="text-red-500">${block.content}</pre>`)
+      })
+  }, [block.type, block.id, block.content, isEditing])
 
   const handleFocus = useCallback(() => {
     setIsEditing(true)
@@ -163,7 +189,7 @@ export function Block({
           onFocus={handleFocus}
           className={cn(
             "w-full bg-transparent outline-none resize-none min-h-[1.5em]",
-            block.type === "code" && "font-mono text-sm",
+            (block.type === "code" || block.type === "mermaid") && "font-mono text-sm",
             block.type === "heading1" && "text-3xl font-bold",
             block.type === "heading2" && "text-2xl font-semibold",
             block.type === "heading3" && "text-xl font-semibold",
@@ -174,6 +200,16 @@ export function Block({
           )}
           style={{ minHeight: "1.5em" }}
           placeholder="输入内容..."
+        />
+      )
+    }
+
+    // Mermaid diagram render mode
+    if (block.type === "mermaid") {
+      return (
+        <div
+          className="mermaid-diagram flex justify-center p-4"
+          dangerouslySetInnerHTML={{ __html: mermaidSvg || `<pre class="text-muted-foreground whitespace-pre-wrap">${block.content}</pre>` }}
         />
       )
     }

@@ -180,3 +180,17 @@
 ::-webkit-scrollbar-thumb:hover {
   opacity: 0.8;
 }
+
+/* Mermaid diagram styles */
+.mermaid-diagram {
+  display: flex;
+  justify-content: center;
+  padding: 1rem;
+  background: transparent;
+  overflow-x: auto;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}

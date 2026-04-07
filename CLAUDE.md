@@ -43,6 +43,7 @@ npm run release:notes  # Generate release notes between tags
 - **shadcn/ui** component library (radix-ui primitives)
 - **Zustand** for state management
 - **KaTeX** for math formula rendering (both inline `$...$` and block `$$...$$`)
+- **Mermaid** for diagram rendering (` ```mermaid ` code blocks)
 - **sonner** for toast notifications
 - **pdfjs-dist** for PDF rendering (可选，当前主要用 WebView 内置渲染)
 
@@ -78,6 +79,12 @@ npm run release:notes  # Generate release notes between tags
 - `src/components/editor/blocks/utils.ts` - Used by **WYSIWYG mode** parsing
 
 When fixing parsing bugs (e.g., list continuation, blockquote merging), both files need updates.
+
+### Mermaid Diagrams
+Mermaid diagrams are rendered via `mermaid.render()` in the main thread:
+- **Split mode**: `markdown-renderer.tsx` uses placeholder divs with `renderMermaidInContainer()`
+- **WYSIWYG mode**: `Block.tsx` uses `mermaidSvg` state with `useEffect` for rendering
+- Theme adapts to light/dark mode via `document.documentElement.classList.contains("dark")`
 
 ### Split Editor Scroll Sync
 - Uses **percentage-based scroll sync** (`split-editor.tsx`)

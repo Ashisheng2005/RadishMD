@@ -13,6 +13,7 @@ export type BlockType =
   | "task"
   | "hr"
   | "table"
+  | "mermaid"
 
 export interface Block {
   id: string

@@ -66,6 +66,7 @@
     "input-otp": "^1.4.2",
     "katex": "^0.16.45",
     "lucide-react": "^0.564.0",
+    "mermaid": "^11.14.0",
     "pdfjs-dist": "^4.9.155",
     "react": "^19.1.0",
     "react-day-picker": "^9.14.0",

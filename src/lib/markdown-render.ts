@@ -8,7 +8,7 @@ export interface MarkdownRenderChunk {
 }
 
 interface MarkdownBlock {
-  type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "ordered" | "task" | "hr" | "table"
+  type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "ordered" | "task" | "hr" | "table" | "mermaid"
   content: string
   sourceLine: number
   checked?: boolean
@@ -25,6 +25,10 @@ function escapeHtml(value: string) {
 // Placeholder markers for math formulas - these are replaced in main thread
 const MATH_INLINE_PLACEHOLDER = (formula: string) => `%%MATH_INLINE:${encodeURIComponent(formula)}%%`
 const MATH_BLOCK_PLACEHOLDER = (formula: string) => `<div class="katex-display" data-math-block="${encodeURIComponent(formula)}"></div>`
+
+// Mermaid placeholder - replaced in main thread
+const MERMAID_PLACEHOLDER = (id: string, content: string) =>
+  `<div class="mermaid-diagram" data-mermaid-id="${id}" data-mermaid-content="${encodeURIComponent(content)}"></div>`
 
 function hashString(value: string) {
   let hash = 2166136261
@@ -114,7 +118,12 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
         index += 1
       }
 
-      blocks.push({ type: "code", content: codeLines.join("\n"), language, sourceLine })
+      // Mermaid diagrams are handled separately with placeholder
+      if (language === "mermaid") {
+        blocks.push({ type: "mermaid" as const, content: codeLines.join("\n"), sourceLine })
+      } else {
+        blocks.push({ type: "code", content: codeLines.join("\n"), language, sourceLine })
+      }
       index += 1
       continue
     }
@@ -310,6 +319,8 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
       return `<h6 class="text-sm font-semibold mt-6 mb-2 text-foreground">${renderInlineMarkdown(block.content, activeFilePath)}</h6>`
     case "code":
       return renderCodeBlockHtml(block.content, block.language)
+    case "mermaid":
+      return MERMAID_PLACEHOLDER(`mermaid-${block.sourceLine}`, block.content)
     case "quote":
       return `<blockquote class="border-l-4 border-primary pl-4 py-2 my-4 bg-muted/50 rounded-r-md text-muted-foreground italic">${renderInlineMarkdown(block.content, activeFilePath)}</blockquote>`
     case "list":

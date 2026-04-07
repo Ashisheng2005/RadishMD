@@ -103,13 +103,24 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
         codeLines.push(lines[i])
         i++
       }
-      blocks.push({
-        id,
-        sourceLine,
-        type: "code",
-        content: codeLines.join("\n"),
-        language,
-      })
+      // Mermaid diagrams use special rendering
+      if (language === "mermaid") {
+        blocks.push({
+          id,
+          sourceLine,
+          type: "mermaid",
+          content: codeLines.join("\n"),
+          language: "mermaid",
+        })
+      } else {
+        blocks.push({
+          id,
+          sourceLine,
+          type: "code",
+          content: codeLines.join("\n"),
+          language,
+        })
+      }
       i++
       continue
     }
@@ -406,6 +417,7 @@ export function getBlockStyles(type: BlockType): string {
     task: "text-base leading-relaxed whitespace-pre-wrap",
     hr: "",
     table: "text-base",
+    mermaid: "font-mono text-sm bg-muted p-4 rounded-lg overflow-x-auto whitespace-pre",
   }
   return styles[type]
 }
