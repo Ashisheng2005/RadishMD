@@ -8,7 +8,7 @@ export interface MarkdownRenderChunk {
 }
 
 interface MarkdownBlock {
-  type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "task" | "hr" | "table"
+  type: "paragraph" | "heading1" | "heading2" | "heading3" | "heading4" | "heading5" | "heading6" | "code" | "quote" | "list" | "ordered" | "task" | "hr" | "table"
   content: string
   sourceLine: number
   checked?: boolean
@@ -160,8 +160,41 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
 
     const listMatch = line.match(/^-\s+(.*)$/)
     if (listMatch) {
-      blocks.push({ type: "list", content: listMatch[1], sourceLine: index })
-      index += 1
+      let content = listMatch[1]
+      // Collect continuation lines (indented lines that are part of this list item)
+      let j = index + 1
+      while (j < lines.length) {
+        const nextLine = lines[j]
+        // Continuation line: starts with 2+ spaces/tabs
+        if (/^[ \t]{2,}/.test(nextLine)) {
+          content += "\n" + nextLine.replace(/^[ \t]+/, "")
+          j++
+        } else {
+          break
+        }
+      }
+      blocks.push({ type: "list", content, sourceLine: index })
+      index = j
+      continue
+    }
+
+    const orderedMatch = line.match(/^(\d+)\.\s+(.*)$/)
+    if (orderedMatch) {
+      let content = orderedMatch[2]
+      // Collect continuation lines (indented lines that are part of this list item)
+      let j = index + 1
+      while (j < lines.length) {
+        const nextLine = lines[j]
+        // Continuation line: starts with 2+ spaces/tabs
+        if (/^[ \t]{2,}/.test(nextLine)) {
+          content += "\n" + nextLine.replace(/^[ \t]+/, "")
+          j++
+        } else {
+          break
+        }
+      }
+      blocks.push({ type: "ordered", content, sourceLine: index })
+      index = j
       continue
     }
 
@@ -262,6 +295,8 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
       return `<blockquote class="border-l-4 border-primary pl-4 py-2 my-4 bg-muted/50 rounded-r-md text-muted-foreground italic">${renderInlineMarkdown(block.content, activeFilePath)}</blockquote>`
     case "list":
       return `<ul class="my-3 pl-6 list-disc"><li class="leading-relaxed">${renderInlineMarkdown(block.content, activeFilePath)}</li></ul>`
+    case "ordered":
+      return `<ol class="my-3 pl-6 list-decimal"><li class="leading-relaxed">${renderInlineMarkdown(block.content, activeFilePath)}</li></ol>`
     case "task":
       return `<ul class="my-3 pl-6 list-disc"><li class="flex items-start gap-2 leading-relaxed"><input type="checkbox" ${block.checked ? "checked" : ""} disabled class="mt-1 rounded border-border" /><span class="${block.checked ? "line-through text-muted-foreground" : ""}">${renderInlineMarkdown(block.content, activeFilePath)}</span></li></ul>`
     case "hr":

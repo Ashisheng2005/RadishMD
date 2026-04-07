@@ -191,16 +191,42 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
     // Unordered list
     const listMatch = line.match(/^-\s+(.*)$/)
     if (listMatch) {
-      blocks.push({ id, sourceLine: i, type: "list", content: listMatch[1] })
-      i++
+      let content = listMatch[1]
+      // Collect continuation lines (indented lines that are part of this list item)
+      let j = i + 1
+      while (j < lines.length) {
+        const nextLine = lines[j]
+        // Continuation line: starts with 2+ spaces/tabs
+        if (/^[ \t]{2,}/.test(nextLine)) {
+          content += "\n" + nextLine.replace(/^[ \t]+/, "")
+          j++
+        } else {
+          break
+        }
+      }
+      blocks.push({ id, sourceLine: i, type: "list", content })
+      i = j
       continue
     }
 
     // Ordered list
     const orderedMatch = line.match(/^(\d+)\.\s+(.*)$/)
     if (orderedMatch) {
-      blocks.push({ id, sourceLine: i, type: "ordered", content: orderedMatch[2] })
-      i++
+      let content = orderedMatch[2]
+      // Collect continuation lines (indented lines that are part of this list item)
+      let j = i + 1
+      while (j < lines.length) {
+        const nextLine = lines[j]
+        // Continuation line: starts with 2+ spaces/tabs
+        if (/^[ \t]{2,}/.test(nextLine)) {
+          content += "\n" + nextLine.replace(/^[ \t]+/, "")
+          j++
+        } else {
+          break
+        }
+      }
+      blocks.push({ id, sourceLine: i, type: "ordered", content })
+      i = j
       continue
     }
 
