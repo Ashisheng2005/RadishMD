@@ -22,6 +22,10 @@ function escapeHtml(value: string) {
     .replace(/>/g, "&gt;")
 }
 
+// Placeholder markers for math formulas - these are replaced in main thread
+const MATH_INLINE_PLACEHOLDER = (formula: string) => `%%MATH_INLINE:${encodeURIComponent(formula)}%%`
+const MATH_BLOCK_PLACEHOLDER = (formula: string) => `<div class="katex-display" data-math-block="${encodeURIComponent(formula)}"></div>`
+
 function hashString(value: string) {
   let hash = 2166136261
 
@@ -113,6 +117,24 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       blocks.push({ type: "code", content: codeLines.join("\n"), language, sourceLine })
       index += 1
       continue
+    }
+
+    // Block math formula $$ ... $$ (multiline support)
+    // Matches $$ at start of line (allowing blank line after), collecting until $$
+    const mathStartTrimmed = line.trim()
+    if (mathStartTrimmed === "$$") {
+      const formulaLines: string[] = []
+      let j = index + 1
+      while (j < lines.length && lines[j].trim() !== "$$") {
+        formulaLines.push(lines[j])
+        j++
+      }
+      // Only treat as math block if we found closing $$
+      if (j < lines.length && lines[j].trim() === "$$") {
+        blocks.push({ type: "paragraph", content: `$$MATH$$:${formulaLines.join("\n")}`, sourceLine: index })
+        index = j + 1
+        continue
+      }
     }
 
     if (line.match(/^---+$/)) {
@@ -212,6 +234,8 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
   result = result.replace(/!([^\[\]\(\)\n]+)\(([^)]+)\)/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
   result = result.replace(/!([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
+  // Inline math $...$
+  result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => MATH_INLINE_PLACEHOLDER(formula))
   result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>')
 
@@ -250,6 +274,12 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
 
       if (parsedImageReference) {
         return buildImageTag(parsedImageReference.src, parsedImageReference.alt, activeFilePath)
+      }
+
+      // Block math formula $$
+      if (block.content.startsWith("$$MATH$$:")) {
+        const formula = block.content.slice(9)
+        return MATH_BLOCK_PLACEHOLDER(formula)
       }
 
       if (!trimmed) {

@@ -1,10 +1,34 @@
 import type { Block, BlockType } from "./types"
+import katex from "katex"
+import "katex/dist/katex.min.css"
 
 export function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
+}
+
+function renderMathInline(formula: string): string {
+  try {
+    return katex.renderToString(formula, {
+      throwOnError: false,
+      displayMode: false,
+    })
+  } catch {
+    return `<code class="text-red-500">${escapeHtml(formula)}</code>`
+  }
+}
+
+function renderMathBlock(formula: string): string {
+  try {
+    return `<div class="katex-display">${katex.renderToString(formula, {
+      throwOnError: false,
+      displayMode: true,
+    })}</div>`
+  } catch {
+    return `<div class="katex-display text-red-500"><code>${escapeHtml(formula)}</code></div>`
+  }
 }
 
 function isTableSeparatorLine(line: string) {
@@ -88,6 +112,21 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       })
       i++
       continue
+    }
+
+    // Block math formula $$ ... $$
+    if (line.trim() === "$$") {
+      const formulaLines: string[] = []
+      let j = i + 1
+      while (j < lines.length && lines[j].trim() !== "$$") {
+        formulaLines.push(lines[j])
+        j++
+      }
+      if (j < lines.length && lines[j].trim() === "$$") {
+        blocks.push({ id, sourceLine: i, type: "paragraph", content: `$$MATH$$:${formulaLines.join("\n")}` })
+        i = j + 1
+        continue
+      }
     }
 
     // Horizontal rule
@@ -261,6 +300,12 @@ export function renderInlineMarkdown(text: string, _baseFilePath?: string | null
   // Normalize line endings first to prevent extra spacing with CRLF files
   let result = text.replace(/\r\n?/g, "\n")
 
+  // Block math formula $$MATH$$: - must be handled before inline math
+  if (result.startsWith("$$MATH$$:")) {
+    const formula = result.slice(9).replace(/\n/g, " ")
+    return renderMathBlock(formula)
+  }
+
   // Don't escape HTML - let browser parse it as HTML
   // WYSIWYG mode uses textarea for editing, so no XSS risk from user input
 
@@ -278,6 +323,9 @@ export function renderInlineMarkdown(text: string, _baseFilePath?: string | null
 
   // Strikethrough
   result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
+
+  // Inline math $...$
+  result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => renderMathInline(formula))
 
   // Inline code
   result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')

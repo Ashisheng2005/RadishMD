@@ -4,6 +4,38 @@ import { renderMarkdownToHtmlChunks, type MarkdownRenderChunk } from "@/lib/mark
 import { useEditorStore } from "@/lib/editor-store"
 import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
+import katex from "katex"
+import "katex/dist/katex.min.css"
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+}
+
+// Renders math placeholders in HTML chunks - called only in main thread
+function renderMathInHtml(html: string): string {
+  // Render inline math placeholders %%MATH_INLINE:encoded%%
+  html = html.replace(/%%MATH_INLINE:([^%]+)%%/g, (_match, encoded) => {
+    const formula = decodeURIComponent(encoded)
+    try {
+      return katex.renderToString(formula, { throwOnError: false, displayMode: false })
+    } catch {
+      return `<code class="text-red-500">${escapeHtml(formula)}</code>`
+    }
+  })
+  // Render block math placeholders
+  html = html.replace(/<div class="katex-display" data-math-block="([^"]+)"><\/div>/g, (_match, encoded) => {
+    const formula = decodeURIComponent(encoded)
+    try {
+      return `<div class="katex-display">${katex.renderToString(formula, { throwOnError: false, displayMode: true })}</div>`
+    } catch {
+      return `<div class="katex-display text-red-500"><code>${escapeHtml(formula)}</code></div>`
+    }
+  })
+  return html
+}
 
 interface MarkdownRendererProps {
   content: string
@@ -35,7 +67,12 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   const enqueueChunkRender = useCallback(
     (_requestId: number, chunks: MarkdownRenderChunk[]) => {
       startTransition(() => {
-        setRenderedChunks(chunks)
+        // Process math formulas in main thread
+        const processedChunks = chunks.map((chunk) => ({
+          ...chunk,
+          html: renderMathInHtml(chunk.html),
+        }))
+        setRenderedChunks(processedChunks)
       })
       setIsRendering(false)
     },
