@@ -75,6 +75,7 @@ npm run release:notes  # Generate release notes between tags
 - Uses `useDeferredValue` for smooth input during rendering
 - **ResizeObserver** monitors preview height changes and corrects sync when rendering stabilizes
 - Throttled at 50ms to avoid excessive recalculations during fast scrolling
+- **PDF mode**: Scroll sync is disabled to prevent flickering during native PDF rendering
 - This approach handles content height differences between editor (textarea) and preview (HTML) more accurately than delta-based sync
 
 ### Layout Structure
@@ -136,7 +137,7 @@ interface FileNode {
 Key store methods:
 - `saveFile()` - Direct save for files with `filePath`, Save As for new files
 - `openFileFromPath(filePath)` - Opens file via CLI file association
-- `setContent(content)` - Updates content and triggers `updateCounts()`
+- `setContent(content)` - Updates content and recalculates word/char counts via `updateCounts()`
 - `hasUnsavedChanges()` - Check if any file has unsaved changes
 - `getUnsavedFiles()` - Get list of files with unsaved changes
 - `watchFileChanges(filePath)` / `clearFileWatcher()` - File watching via Rust backend
@@ -196,7 +197,7 @@ Key store methods:
 | `src/components/editor/sidebar.tsx` | File tree sidebar container |
 | `src/components/editor/file-tree.tsx` | File tree with drag-drop support |
 | `src/components/editor/title-bar.tsx` | Title bar with menu, update dialog, window controls |
-| `src/components/editor/split-editor.tsx` | Split view with dynamic delta scroll sync |
+| `src/components/editor/split-editor.tsx` | Split view with percentage-based scroll sync |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |

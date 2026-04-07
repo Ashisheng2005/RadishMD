@@ -614,7 +614,10 @@ export function SplitEditor() {
               style={{ overflowAnchor: "none" }}
             >
               {contentType === "pdf" ? (
-                <div className="min-h-[80vh]">
+                <div
+                  className="min-h-[80vh] will-change-transform"
+                  style={{ contain: "layout style paint" }}
+                >
                   <embed
                     src={content}
                     type="application/pdf"
