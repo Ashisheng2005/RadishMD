@@ -310,6 +310,21 @@ export function Block({
     )
   }
 
+  if (block.type === "quote") {
+    return (
+      <div
+        className={cn(
+          "border-l-4 border-primary pl-4 pr-4 py-2 my-4 bg-muted/30 rounded-r-md",
+          isActive && "ring-2 ring-primary/30",
+          !isActive && "hover:bg-accent/5"
+        )}
+        onClick={handleClick}
+      >
+        {renderContent()}
+      </div>
+    )
+  }
+
   return (
     <div
       className={cn(getContainerClass(), getWrapperClass())}

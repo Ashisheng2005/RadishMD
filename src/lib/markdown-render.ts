@@ -200,8 +200,27 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
 
     const quoteMatch = line.match(/^>\s*(.*)$/)
     if (quoteMatch) {
-      blocks.push({ type: "quote", content: quoteMatch[1], sourceLine: index })
-      index += 1
+      let content = quoteMatch[1]
+      let j = index + 1
+      // Collect continuation blockquote lines (including empty lines)
+      while (j < lines.length) {
+        const nextLine = lines[j]
+        if (nextLine.trim() === "") {
+          // Empty line within blockquote
+          content += "\n"
+          j++
+        } else {
+          const nextQuoteMatch = nextLine.match(/^>\s*(.*)$/)
+          if (nextQuoteMatch) {
+            content += "\n" + nextQuoteMatch[1]
+            j++
+          } else {
+            break
+          }
+        }
+      }
+      blocks.push({ type: "quote", content, sourceLine: index })
+      index = j
       continue
     }
 

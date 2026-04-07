@@ -16,6 +16,7 @@ npm run preview    # Preview built frontend
 
 # Tauri (full app)
 npm run tauri dev      # Run with Rust backend + frontend (port 1421 for HMR)
+npm run dev:tauri      # Alternative: dev server on port 1421 with strictPort
 npm run tauri build    # Build production .exe
 
 # Version management (auto-runs before build/dev)
@@ -41,6 +42,7 @@ npm run release:notes  # Generate release notes between tags
 - **Tailwind CSS 4** with CSS variables (`@tailwindcss/vite` plugin)
 - **shadcn/ui** component library (radix-ui primitives)
 - **Zustand** for state management
+- **KaTeX** for math formula rendering (both inline `$...$` and block `$$...$$`)
 - **sonner** for toast notifications
 - **pdfjs-dist** for PDF rendering (可选，当前主要用 WebView 内置渲染)
 
@@ -68,6 +70,14 @@ npm run release:notes  # Generate release notes between tags
 - Custom block-based WYSIWYG editor with controlled inputs
 - Code syntax highlighting via `code-highlighting.ts` (shared by split preview and WYSIWYG modes)
 - Markdown rendering with `markdown-render.ts`
+
+### Markdown Rendering (Two Implementations)
+
+**Important**: Markdown parsing has two separate implementations that must be kept in sync:
+- `src/lib/markdown-render.ts` - Used by **Split mode** preview rendering
+- `src/components/editor/blocks/utils.ts` - Used by **WYSIWYG mode** parsing
+
+When fixing parsing bugs (e.g., list continuation, blockquote merging), both files need updates.
 
 ### Split Editor Scroll Sync
 - Uses **percentage-based scroll sync** (`split-editor.tsx`)
@@ -200,6 +210,7 @@ Key store methods:
 | `src/components/editor/split-editor.tsx` | Split view with percentage-based scroll sync |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
+| `src/components/editor/blocks/types.ts` | Block and BlockType definitions |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
 | `src/components/editor/pdf-renderer.tsx` | PDF.js renderer (备用，当前使用原生 embed) |
 | `src/components/editor/close-confirm-dialog.tsx` | Close confirmation for unsaved changes |
