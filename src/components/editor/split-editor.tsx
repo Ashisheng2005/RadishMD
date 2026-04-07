@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils"
 import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/image-utils"
 
 export function SplitEditor() {
-  const { content, setContent, splitViewMode, tabSize, contentType } = useEditorStore()
+  const { content, setContent, splitViewMode, tabSize, contentType, shouldResetScroll, setShouldResetScroll, activeFileId, saveScrollPosition, getScrollPosition } = useEditorStore()
   const deferredContent = useDeferredValue(content) // 使用 useDeferredValue 降低渲染优先级，保持输入流畅
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
@@ -16,6 +16,8 @@ export function SplitEditor() {
   const countUpdateTimeoutRef = useRef<number | null>(null) // 字数统计防抖定时器
   const lastSyncTimeRef = useRef(0) // ResizeObserver 节流时间戳
   const pendingSyncRef = useRef<{ source: HTMLElement; target: HTMLElement; targetType: "editor" | "preview" } | null>(null) // 待执行的同步任务
+  const lastActiveFileIdRef = useRef<string | null>(null) // 跟踪上次的文件 ID，用于保存滚动位置
+  const isRestoringScrollRef = useRef(false) // 标记是否正在恢复滚动位置
 
   const suppressScroll = useCallback((target: "editor" | "preview", duration = 180) => {
     // 抑制目标区域的滚动事件，防止主被动滚动相互触发导致死循环或抖动
@@ -94,6 +96,7 @@ export function SplitEditor() {
     const { contentType: ct, splitViewMode: svm } = useEditorStore.getState()
     if (ct === "pdf" || svm === "render") return
     if (performance.now() < ignoreEditorScrollUntilRef.current) return
+    if (isRestoringScrollRef.current) return
 
     const textarea = textareaRef.current
     const preview = previewRef.current
@@ -104,6 +107,7 @@ export function SplitEditor() {
 
   const handlePreviewScroll = useCallback(() => {
     if (performance.now() < ignorePreviewScrollUntilRef.current) return
+    if (isRestoringScrollRef.current) return
 
     const textarea = textareaRef.current
     const preview = previewRef.current
@@ -128,6 +132,53 @@ export function SplitEditor() {
       }
     }
   }, [content])
+
+  // 监听文件切换，保存/恢复滚动位置（使用百分比）
+  useEffect(() => {
+    const textarea = textareaRef.current
+    const preview = previewRef.current
+    if (!textarea || !preview) return
+
+    // 保存当前文件的滚动位置（转换为百分比）
+    if (lastActiveFileIdRef.current && lastActiveFileIdRef.current !== activeFileId) {
+      const textareaScrollable = textarea.scrollHeight - textarea.clientHeight
+      const previewScrollable = preview.scrollHeight - preview.clientHeight
+      const editorPercent = textareaScrollable > 0 ? textarea.scrollTop / textareaScrollable : 0
+      const previewPercent = previewScrollable > 0 ? preview.scrollTop / previewScrollable : 0
+      saveScrollPosition(lastActiveFileIdRef.current, editorPercent, previewPercent)
+    }
+
+    // 切换到新文件
+    if (activeFileId && activeFileId !== lastActiveFileIdRef.current) {
+      lastActiveFileIdRef.current = activeFileId
+      isRestoringScrollRef.current = true
+
+      if (shouldResetScroll) {
+        // 新导入文件，重置到顶部
+        textarea.scrollTop = 0
+        preview.scrollTop = 0
+        setShouldResetScroll(false)
+        isRestoringScrollRef.current = false
+      } else {
+        // 恢复该文件之前的滚动位置（百分比转绝对值）
+        const savedPosition = getScrollPosition(activeFileId)
+        // 使用 requestAnimationFrame 确保 DOM 已完成渲染
+        requestAnimationFrame(() => {
+          if (savedPosition) {
+            const textareaScrollable = textarea.scrollHeight - textarea.clientHeight
+            const previewScrollable = preview.scrollHeight - preview.clientHeight
+            textarea.scrollTop = savedPosition.editor * textareaScrollable
+            isRestoringScrollRef.current = false
+            preview.scrollTop = savedPosition.preview * previewScrollable
+          } else {
+            textarea.scrollTop = 0
+            preview.scrollTop = 0
+            isRestoringScrollRef.current = false
+          }
+        })
+      }
+    }
+  }, [activeFileId, shouldResetScroll, saveScrollPosition, getScrollPosition, setShouldResetScroll])
 
   // 监听预览区高度变化，当渲染稳定时修正滚动位置
   useEffect(() => {

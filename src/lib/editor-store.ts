@@ -77,6 +77,11 @@ interface EditorState {
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
+  shouldResetScroll: boolean
+  setShouldResetScroll: (value: boolean) => void
+  fileScrollPositions: Record<string, { editor: number; preview: number }>
+  saveScrollPosition: (fileId: string, editorScroll: number, previewScroll: number) => void
+  getScrollPosition: (fileId: string) => { editor: number; preview: number } | null
   setActiveFile: (id: string) => Promise<void>
   setContent: (content: string) => void
   setContentType: (type: "markdown" | "pdf") => void
@@ -217,6 +222,25 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   wordCount: 0,
   charCount: 0,
   creatingType: null,
+  shouldResetScroll: false,
+  fileScrollPositions: {},
+
+  setShouldResetScroll: (value: boolean) => {
+    set({ shouldResetScroll: value })
+  },
+
+  saveScrollPosition: (fileId: string, editorScroll: number, previewScroll: number) => {
+    set((state) => ({
+      fileScrollPositions: {
+        ...state.fileScrollPositions,
+        [fileId]: { editor: editorScroll, preview: previewScroll },
+      },
+    }))
+  },
+
+  getScrollPosition: (fileId: string) => {
+    return get().fileScrollPositions[fileId] ?? null
+  },
 
   setActiveFile: async (id: string) => {
     const file = get().findNodeById(id)

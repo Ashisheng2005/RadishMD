@@ -129,6 +129,7 @@ export async function importFiles(): Promise<void> {
   if (activationTargetId) {
     console.log("[RadishMD][import] activation target", { activationTargetId })
     void store.activateFileById(activationTargetId)
+    store.setShouldResetScroll(true)
 
     const activationTargetPath =
       store.findNodeById(activationTargetId)?.filePath ??
