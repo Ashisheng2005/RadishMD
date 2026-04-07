@@ -56,6 +56,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     content: "",
     activeFilePath: null,
   })
+  const lastActiveFileIdRef = useRef<string | null>(null)
   const activeFilePath = useEditorStore((state) => {
     if (!state.activeFileId) {
       return null
@@ -128,6 +129,24 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
       activeFilePath,
     }
   }, [activeFilePath, deferredContent])
+
+  // 文件切换时立即渲染，跳过延迟
+  useEffect(() => {
+    const activeFileId = useEditorStore.getState().activeFileId
+    if (activeFileId && activeFileId !== lastActiveFileIdRef.current) {
+      lastActiveFileIdRef.current = activeFileId
+      // 立即渲染，不使用 debounce
+      if (renderDebounceTimerRef.current !== null) {
+        window.clearTimeout(renderDebounceTimerRef.current)
+        renderDebounceTimerRef.current = null
+      }
+      if (!postRenderRequest(content, activeFilePath)) {
+        const chunks = renderMarkdownToHtmlChunks(content, activeFilePath)
+        setRenderedChunks(chunks)
+        setIsRendering(false)
+      }
+    }
+  }, [content, activeFilePath])
 
   useEffect(() => {
     if (typeof Worker === "undefined") {

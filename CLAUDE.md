@@ -88,6 +88,14 @@ When fixing parsing bugs (e.g., list continuation, blockquote merging), both fil
 - **PDF mode**: Scroll sync is disabled to prevent flickering during native PDF rendering
 - This approach handles content height differences between editor (textarea) and preview (HTML) more accurately than delta-based sync
 
+### Per-File Scroll Position
+Each file maintains its own scroll position (percentage-based) in `editor-store`:
+- `fileScrollPositions` - Record of file IDs to `{ editor: number, preview: number }`
+- `saveScrollPosition()` / `getScrollPosition()` - Save/restore scroll per file
+- `shouldResetScroll` - Flag to reset scroll to top (used when importing new files)
+- File switch: saves current position → restores target file position
+- Import new file: resets to top (0%) instead of restoring
+
 ### Layout Structure
 ```
 TitleBar (with menu, update dialog, window controls)
@@ -152,6 +160,11 @@ Key store methods:
 - `getUnsavedFiles()` - Get list of files with unsaved changes
 - `watchFileChanges(filePath)` / `clearFileWatcher()` - File watching via Rust backend
 
+Scroll position methods (per-file):
+- `saveScrollPosition(fileId, editorScroll, previewScroll)` - Save scroll as percentage
+- `getScrollPosition(fileId)` - Get saved scroll position for a file
+- `setShouldResetScroll(value)` - Set flag to reset scroll to top on next switch
+
 ### File Operations (`src/lib/file-operations.ts`)
 - `importFiles()` - Uses Tauri dialog plugin to select .md/.pdf files; PDFs use `convertFileSrc` for streaming
 - File reads via `invoke("read_file")`, writes via `invoke("write_file")`
@@ -208,6 +221,7 @@ Key store methods:
 | `src/components/editor/file-tree.tsx` | File tree with drag-drop support |
 | `src/components/editor/title-bar.tsx` | Title bar with menu, update dialog, window controls |
 | `src/components/editor/split-editor.tsx` | Split view with percentage-based scroll sync |
+| `src/components/editor/markdown-renderer.tsx` | Markdown preview renderer (immediate on switch, deferred on edit) |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
 | `src/components/editor/blocks/types.ts` | Block and BlockType definitions |
