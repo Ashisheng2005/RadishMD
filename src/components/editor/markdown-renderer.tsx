@@ -1,6 +1,7 @@
 import { useCallback, useDeferredValue, useEffect, useRef, useState, useTransition } from "react"
 import { ImageLightbox } from "./image-lightbox"
 import { renderMarkdownToHtmlChunks, type MarkdownRenderChunk } from "@/lib/markdown-render"
+import { resolveImageSource } from "@/lib/image-utils"
 import { useEditorStore } from "@/lib/editor-store"
 import { cn } from "@/lib/utils"
 import { openExternalTarget } from "@/lib/runtime"
@@ -13,6 +14,43 @@ function escapeHtml(value: string) {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
+}
+
+// Decode HTML entities in a string
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+}
+
+// Resolve image paths in HTML chunks on the main thread (worker can't use convertFileSrc)
+function resolveImagePathsInHtml(chunks: MarkdownRenderChunk[], baseFilePath: string | null): MarkdownRenderChunk[] {
+  if (!baseFilePath) {
+    return chunks
+  }
+
+  return chunks.map((chunk) => {
+    // Replace image src attributes with resolved asset URLs
+    const resolvedHtml = chunk.html.replace(
+      /<img\s+([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi,
+      (_match, before, src, after) => {
+        // Decode HTML entities before resolving (the src was HTML-escaped by buildImageTag)
+        const decodedSrc = decodeHtmlEntities(src)
+        const resolvedSrc = resolveImageSource(decodedSrc, baseFilePath)
+        // Re-escape for HTML attribute context
+        const escapedSrc = resolvedSrc
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+        return `<img ${before}src="${escapedSrc}"${after}>`
+      }
+    )
+    return { ...chunk, html: resolvedHtml }
+  })
 }
 
 // Renders math placeholders in HTML chunks - called only in main thread
@@ -159,13 +197,16 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
   const enqueueChunkRender = useCallback(
     (_requestId: number, chunks: MarkdownRenderChunk[]) => {
+      const baseFilePath = latestRenderInputRef.current.activeFilePath
       startTransition(() => {
-        // Process math formulas in main thread
+        // Process math formulas and resolve image paths in main thread
         const processedChunks = chunks.map((chunk) => ({
           ...chunk,
           html: renderMathInHtml(chunk.html),
         }))
-        setRenderedChunks(processedChunks)
+        // Resolve image paths after math formulas are processed
+        const resolvedChunks = resolveImagePathsInHtml(processedChunks, baseFilePath)
+        setRenderedChunks(resolvedChunks)
       })
       setIsRendering(false)
     },
@@ -207,7 +248,8 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
         if (!postRenderRequest(renderContent, renderActiveFilePath)) {
           const chunks = renderMarkdownToHtmlChunks(renderContent, renderActiveFilePath)
-          setRenderedChunks(chunks)
+          const resolvedChunks = resolveImagePathsInHtml(chunks, renderActiveFilePath)
+          setRenderedChunks(resolvedChunks)
           setIsRendering(false)
         }
       }, 220)
@@ -234,7 +276,8 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
       }
       if (!postRenderRequest(content, activeFilePath)) {
         const chunks = renderMarkdownToHtmlChunks(content, activeFilePath)
-        setRenderedChunks(chunks)
+        const resolvedChunks = resolveImagePathsInHtml(chunks, activeFilePath)
+        setRenderedChunks(resolvedChunks)
         setIsRendering(false)
       }
     }
@@ -243,7 +286,8 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   useEffect(() => {
     if (typeof Worker === "undefined") {
       const chunks = renderMarkdownToHtmlChunks(deferredContent, activeFilePath)
-      setRenderedChunks(chunks)
+      const resolvedChunks = resolveImagePathsInHtml(chunks, activeFilePath)
+      setRenderedChunks(resolvedChunks)
       setIsRendering(false)
       return
     }
@@ -297,9 +341,9 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
       return
     }
 
-    const latestInput = latestRenderInputRef.current
+    // Worker is ready, trigger render using current content
     setIsRendering(true)
-    scheduleRender(latestInput.content, latestInput.activeFilePath)
+    scheduleRender(deferredContent, activeFilePath)
   }, [activeFilePath, deferredContent, isWorkerReady, scheduleRender])
 
   const isRenderLoading = isRendering || isPending

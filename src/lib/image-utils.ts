@@ -1,4 +1,32 @@
+import { convertFileSrc } from "@tauri-apps/api/core"
+
 const IMAGE_EXTENSIONS = /\.(avif|bmp|gif|ico|jpe?g|png|svg|webp)(?:[?#].*)?$/i
+
+// Simplified normalizeFilePath - does not depend on window or other main-thread-only APIs
+function normalizeFilePath(filePath: string) {
+  const trimmedPath = filePath.trim()
+
+  if (!trimmedPath || !trimmedPath.startsWith("file://")) {
+    return trimmedPath
+  }
+
+  try {
+    const parsedUrl = new URL(trimmedPath)
+    const decodedPath = decodeURIComponent(parsedUrl.pathname)
+
+    if (parsedUrl.host && parsedUrl.host !== "localhost") {
+      return `//${parsedUrl.host}${decodedPath}`
+    }
+
+    if (/^\/[A-Za-z]:\//.test(decodedPath)) {
+      return decodedPath.slice(1)
+    }
+
+    return decodedPath
+  } catch {
+    return trimmedPath
+  }
+}
 
 const IMAGE_URL_QUERY_KEYS = ["mediaurl", "imgurl", "imageurl", "img", "src", "url"]
 
@@ -90,8 +118,31 @@ export function isStandaloneImageReference(value: string) {
   return parseImageReference(value) !== null
 }
 
-// Simple passthrough - let browser handle relative paths
-export function resolveImageSource(source: string, _baseFilePath?: string | null): string {
+// Resolve local image paths to Tauri asset URLs
+export function resolveImageSource(source: string, baseFilePath?: string | null): string {
+  // Already an absolute URL, data URI, or asset URL - return as-is
+  if (
+    source.startsWith("data:") ||
+    source.startsWith("asset://") ||
+    source.startsWith("http://") ||
+    source.startsWith("https://") ||
+    source.startsWith("file://")
+  ) {
+    return source
+  }
+
+  // Relative path - convert to asset URL using baseFilePath
+  if (baseFilePath) {
+    // Calculate the directory of the base file
+    const lastSlash = Math.max(baseFilePath.lastIndexOf("/"), baseFilePath.lastIndexOf("\\"))
+    const baseDir = lastSlash > 0 ? baseFilePath.substring(0, lastSlash) : ""
+    // Combine with source to get absolute path
+    const absolutePath = baseDir ? `${baseDir}/${source}` : source
+    const normalizedPath = normalizeFilePath(absolutePath)
+    return convertFileSrc(normalizedPath)
+  }
+
+  // No baseFilePath - return original source
   return source
 }
 
@@ -107,7 +158,8 @@ export function getImageAltFromSource(source: string) {
 }
 
 export function buildImageTag(source: string, alt: string, _baseFilePath?: string | null) {
-  // Direct use - let browser resolve relative paths
+  // Note: Image path resolution (convertFileSrc) happens in the main thread via resolveImagePathsInHtml()
+  // This function just builds the img tag with the raw source - let the main thread post-process the paths
   return `<img src="${escapeHtmlAttribute(source)}" alt="${escapeHtmlAttribute(alt)}" class="max-w-full rounded-md my-4" />`
 }
 

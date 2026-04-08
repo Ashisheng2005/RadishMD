@@ -44,7 +44,7 @@ npm run release:notes  # Generate release notes between tags
 - **Zustand** for state management
 - **KaTeX** for math formula rendering (both inline `$...$` and block `$$...$$`)
 - **Mermaid** for diagram rendering (` ```mermaid ` code blocks)
-- **sonner** for toast notifications
+- **sonner** for toast notifications (CSS fix in `src/index.css`: `[data-sonner-toaster] { position: fixed !important; z-index: 999999999 !important; }` - sonner's `:where()` selector has 0 specificity and gets overridden by Tailwind CSS 4 base styles in production build)
 - **pdfjs-dist** for PDF rendering (可选，当前主要用 WebView 内置渲染)
 
 ### Backend (Rust)
@@ -138,10 +138,10 @@ The WYSIWYG editor uses a **component-based approach** with controlled inputs:
    - Markdown-to-markdown sync only on internal updates
 
 5. **Image Handling** (`src/lib/image-utils.ts`):
-   - `resolveImageSource()` - Direct path passthrough, browser handles resolution
-   - `buildImageTag()` - Builds `<img>` tag with proper attributes
+   - `resolveImageSource()` - Converts local image paths to Tauri asset URLs (`asset://localhost/...`). Handles relative paths by combining with `baseFilePath` directory, and passes through absolute URLs, data URIs, and existing asset URLs unchanged
+   - `buildImageTag()` - Builds `<img>` tag with properly resolved asset URLs
    - `parseImageReference()` - Parses markdown image syntax `![alt](src)`
-   - Images use raw paths in both WYSIWYG and Split modes
+   - **Important**: Split mode renders markdown in a Web Worker, so image path resolution happens in the main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`. The Worker returns HTML chunks with raw paths, then main thread post-processes to convert them to asset URLs
 
 ```typescript
 interface FileNode {

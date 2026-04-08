@@ -1,6 +1,6 @@
 <p align="center">
   <img src="src-tauri/icons/128x128.png" alt="RadishMD" width="128" />
-</p>
+</p>  
 
 <h1 align="center">RadishMD</h1>
 
@@ -53,7 +53,7 @@ npm run tauri build
 - [轻量编辑器迁移计划](docx/轻量编辑器迁移计划.md)
 - [贡献指南](CONTRIBUTING.md)
 
-## 安装
+## 安装  
 
 Linux 环境可使用发行包安装：
 

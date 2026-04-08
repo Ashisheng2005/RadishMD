@@ -174,8 +174,10 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       let j = index + 1
       while (j < lines.length) {
         const nextLine = lines[j]
+        const nextTrimmed = nextLine.trim()
         // Continuation line: starts with 2+ spaces/tabs
-        if (/^[ \t]{2,}/.test(nextLine)) {
+        // But not a code block start/end marker
+        if (/^[ \t]{2,}/.test(nextLine) && !nextTrimmed.startsWith("```")) {
           content += "\n" + nextLine.replace(/^[ \t]+/, "")
           j++
         } else {
@@ -194,8 +196,10 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       let j = index + 1
       while (j < lines.length) {
         const nextLine = lines[j]
+        const nextTrimmed = nextLine.trim()
         // Continuation line: starts with 2+ spaces/tabs
-        if (/^[ \t]{2,}/.test(nextLine)) {
+        // But not a code block start/end marker
+        if (/^[ \t]{2,}/.test(nextLine) && !nextTrimmed.startsWith("```")) {
           content += "\n" + nextLine.replace(/^[ \t]+/, "")
           j++
         } else {
@@ -286,15 +290,41 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
     return buildImageTag(parsedImageReference.src, parsedImageReference.alt, baseFilePath)
   }
 
+  // For URLs with &, we need to escape them as &amp; but not double-escape
+  // Strategy: replace & with a temp marker before HTML escaping, restore after
+  const AMP_PLACEHOLDER = "\x00AMP\x00"
+  result = result.replace(/&(?!amp;)/g, AMP_PLACEHOLDER)
+
+  // Now HTML escape
   result = result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-  result = result.replace(/\n/g, "<br>")
+
+  // Restore & that wasn't part of &amp;
+  result = result.replace(new RegExp(AMP_PLACEHOLDER, 'g'), "&amp;")
+
+  // Now process images in the escaped text
+  // The captured URL may contain &amp; which we need to decode before passing to buildImageTag
+  function decodeUrl(url: string): string {
+    return url.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+  }
+
+  result = result.replace(
+    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
+  )
+  result = result.replace(
+    /!([^\[\]\(\)\n]+)\(([^)]+)\)/g,
+    (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
+  )
+  result = result.replace(
+    /!([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g,
+    (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
+  )
+
+  // Process other markdown
   result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
   result = result.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
   result = result.replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
   result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
-  result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
-  result = result.replace(/!([^\[\]\(\)\n]+)\(([^)]+)\)/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
-  result = result.replace(/!([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g, (_match, alt, src) => buildImageTag(src, alt, baseFilePath))
   // Inline math $...$
   result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => MATH_INLINE_PLACEHOLDER(formula))
   result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')

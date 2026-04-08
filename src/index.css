@@ -194,3 +194,10 @@
   max-width: 100%;
   height: auto;
 }
+
+/* Fix sonner toast position in build mode - sonner's :where() selector has 0 specificity
+   and gets overridden by Tailwind CSS 4 base styles in production build */
+[data-sonner-toaster] {
+  position: fixed !important;
+  z-index: 999999999 !important;
+}

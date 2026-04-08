@@ -1,6 +1,7 @@
 import type { Block, BlockType } from "./types"
 import katex from "katex"
 import "katex/dist/katex.min.css"
+import { resolveImageSource } from "@/lib/image-utils"
 
 export function escapeHtml(value: string) {
   return value
@@ -92,11 +93,12 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
   while (i < lines.length) {
     const line = lines[i]
     const id = `block-${blockId++}`
+    const trimmedLine = line.trim()
 
     // Code block
-    if (line.startsWith("```")) {
+    if (trimmedLine.startsWith("```")) {
       const sourceLine = i
-      const language = line.slice(3).trim()
+      const language = trimmedLine.slice(3).trim()
       const codeLines: string[] = []
       i++
       while (i < lines.length && !lines[i].trim().startsWith("```")) {
@@ -207,8 +209,10 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       let j = i + 1
       while (j < lines.length) {
         const nextLine = lines[j]
+        const nextTrimmed = nextLine.trim()
         // Continuation line: starts with 2+ spaces/tabs
-        if (/^[ \t]{2,}/.test(nextLine)) {
+        // But not a code block start/end marker
+        if (/^[ \t]{2,}/.test(nextLine) && !nextTrimmed.startsWith("```")) {
           content += "\n" + nextLine.replace(/^[ \t]+/, "")
           j++
         } else {
@@ -228,8 +232,10 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       let j = i + 1
       while (j < lines.length) {
         const nextLine = lines[j]
+        const nextTrimmed = nextLine.trim()
         // Continuation line: starts with 2+ spaces/tabs
-        if (/^[ \t]{2,}/.test(nextLine)) {
+        // But not a code block start/end marker
+        if (/^[ \t]{2,}/.test(nextLine) && !nextTrimmed.startsWith("```")) {
           content += "\n" + nextLine.replace(/^[ \t]+/, "")
           j++
         } else {
@@ -352,7 +358,7 @@ export function blocksToMarkdown(blocks: Block[]): string {
     .join("\n")
 }
 
-export function renderInlineMarkdown(text: string, _baseFilePath?: string | null): string {
+export function renderInlineMarkdown(text: string, baseFilePath?: string | null): string {
   // Normalize line endings first to prevent extra spacing with CRLF files
   let result = text.replace(/\r\n?/g, "\n")
 
@@ -364,6 +370,11 @@ export function renderInlineMarkdown(text: string, _baseFilePath?: string | null
 
   // Don't escape HTML - let browser parse it as HTML
   // WYSIWYG mode uses textarea for editing, so no XSS risk from user input
+
+  // If content starts with < (HTML tag), return as-is for the browser to parse
+  if (result.trim().startsWith("<")) {
+    return result
+  }
 
   // Convert newlines to <br> for multi-line support
   result = result.replace(/\n/g, "<br>")
@@ -386,10 +397,13 @@ export function renderInlineMarkdown(text: string, _baseFilePath?: string | null
   // Inline code
   result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
 
-  // Images (markdown style)
+  // Images (markdown style) - resolve local image paths to asset URLs
   result = result.replace(
     /!\[([^\]]*)\]\(([^)]+)\)/g,
-    (_match, alt, src) => `<img src="${escapeHtml(src)}" alt="${escapeHtml(alt || "图片")}" class="max-w-full rounded-md my-2" />`
+    (_match, alt, src) => {
+      const resolvedSrc = resolveImageSource(src, baseFilePath)
+      return `<img src="${escapeHtml(resolvedSrc)}" alt="${escapeHtml(alt || "图片")}" class="max-w-full rounded-md my-2" />`
+    }
   )
 
   // Links
