@@ -371,9 +371,31 @@ export function renderInlineMarkdown(text: string, baseFilePath?: string | null)
   // Don't escape HTML - let browser parse it as HTML
   // WYSIWYG mode uses textarea for editing, so no XSS risk from user input
 
-  // If content starts with < (HTML tag), return as-is for the browser to parse
+  // If content starts with < (HTML tag), resolve image paths and process math
   if (result.trim().startsWith("<")) {
-    return result
+    let resolvedHtml = result
+
+    // Resolve image paths in raw HTML
+    resolvedHtml = resolvedHtml.replace(
+      /<img\s+([^>]*?)src=["']([^"']+)["']([^>]*?)>/gi,
+      (_match, before, src, after) => {
+        const resolvedSrc = resolveImageSource(src, baseFilePath)
+        const escapedSrc = resolvedSrc
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+        return `<img ${before}src="${escapedSrc}"${after}>`
+      }
+    )
+
+    // Process inline math $...$ within HTML
+    resolvedHtml = resolvedHtml.replace(
+      /\$([^$\n]+)\$/g,
+      (_match, formula) => renderMathInline(formula)
+    )
+
+    return resolvedHtml
   }
 
   // Convert newlines to <br> for multi-line support

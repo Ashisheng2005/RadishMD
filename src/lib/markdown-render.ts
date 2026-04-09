@@ -311,14 +311,6 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
     /!\[([^\]]*)\]\(([^)]+)\)/g,
     (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
   )
-  result = result.replace(
-    /!([^\[\]\(\)\n]+)\(([^)]+)\)/g,
-    (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
-  )
-  result = result.replace(
-    /!([^\[\]\(\)（）\n]+)[（(]([^()（）\n]+)[)）]/g,
-    (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
-  )
 
   // Process other markdown
   result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')

@@ -44,8 +44,10 @@ npm run release:notes  # Generate release notes between tags
 - **Zustand** for state management
 - **KaTeX** for math formula rendering (both inline `$...$` and block `$$...$$`)
 - **Mermaid** for diagram rendering (` ```mermaid ` code blocks)
-- **sonner** for toast notifications (CSS fix in `src/index.css`: `[data-sonner-toaster] { position: fixed !important; z-index: 999999999 !important; }` - sonner's `:where()` selector has 0 specificity and gets overridden by Tailwind CSS 4 base styles in production build)
-- **pdfjs-dist** for PDF rendering (可选，当前主要用 WebView 内置渲染)
+- **sonner** for toast notifications
+- **pdfjs-dist** for PDF rendering (optional, currently uses native WebView embed)
+
+> **Note**: Sonner toasts require a CSS fix in `src/index.css` for production builds. Sonner's `:where()` selector has 0 specificity and gets overridden by Tailwind CSS 4 base styles. See line ~200 in `src/index.css`: `[data-sonner-toaster] { position: fixed !important; z-index: 999999999 !important; }`
 
 ### Backend (Rust)
 - **Tauri 2** with plugins: `opener`, `dialog`, `cli`
@@ -66,19 +68,39 @@ npm run release:notes  # Generate release notes between tags
 - Used for PDF viewing - WebView natively streams and renders PDFs via `<embed src={assetUrl}>`
 - Bypasses WebView's `file://` security restrictions
 
-### Editor Components
-- **CodeMirror 7** for syntax highlighting in split mode (`@codemirror/*` packages)
-- Custom block-based WYSIWYG editor with controlled inputs
-- Code syntax highlighting via `code-highlighting.ts` (shared by split preview and WYSIWYG modes)
-- Markdown rendering with `markdown-render.ts`
+### Important Code Patterns
+
+#### Dual Markdown Parsing Implementations
+Markdown parsing has **two separate implementations** that must be kept in sync:
+- `src/lib/markdown-render.ts` - Used by **Split mode** preview rendering (runs in Web Worker)
+- `src/components/editor/blocks/utils.ts` - Used by **WYSIWYG mode** parsing
+
+When fixing parsing bugs (list continuation, blockquote merging, etc.), both files need updates.
+
+#### Image Path Resolution
+- **Split mode**: Worker cannot use `convertFileSrc` (references `window`). Image path resolution happens in main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`.
+- **WYSIWYG mode**: Direct `resolveImageSource()` call since it runs in main thread.
+- **Critical**: `buildImageTag()` does NOT call `resolveImageSource()` - path resolution is done by the caller.
+
+#### HTML Escaping Order for Images
+In `markdown-render.ts`, image regex must run BEFORE HTML escaping to preserve `&` in URLs:
+```typescript
+// Process images BEFORE HTML escaping to preserve & in URLs
+result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, ...)
+result = result.replace(/&/g, "&amp;") // HTML escape happens AFTER
+```
+
+#### List Continuation Pattern
+List continuation lines use 2+ spaces/tabs but must exclude code block markers:
+```typescript
+if (/^[ \t]{2,}/.test(nextLine) && !nextTrimmed.startsWith("```")) {
+  // This is a continuation line
+}
+```
 
 ### Markdown Rendering (Two Implementations)
 
-**Important**: Markdown parsing has two separate implementations that must be kept in sync:
-- `src/lib/markdown-render.ts` - Used by **Split mode** preview rendering
-- `src/components/editor/blocks/utils.ts` - Used by **WYSIWYG mode** parsing
-
-When fixing parsing bugs (e.g., list continuation, blockquote merging), both files need updates.
+**Important**: See "Dual Markdown Parsing Implementations" in Important Code Patterns above.
 
 ### Mermaid Diagrams
 Mermaid diagrams are rendered via `mermaid.render()` in the main thread:
@@ -139,9 +161,13 @@ The WYSIWYG editor uses a **component-based approach** with controlled inputs:
 
 5. **Image Handling** (`src/lib/image-utils.ts`):
    - `resolveImageSource()` - Converts local image paths to Tauri asset URLs (`asset://localhost/...`). Handles relative paths by combining with `baseFilePath` directory, and passes through absolute URLs, data URIs, and existing asset URLs unchanged
-   - `buildImageTag()` - Builds `<img>` tag with properly resolved asset URLs
+   - `buildImageTag()` - Builds `<img>` tag (does NOT resolve paths - caller handles resolution)
    - `parseImageReference()` - Parses markdown image syntax `![alt](src)`
-   - **Important**: Split mode renders markdown in a Web Worker, so image path resolution happens in the main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`. The Worker returns HTML chunks with raw paths, then main thread post-processes to convert them to asset URLs
+   - **Important**: Split mode renders markdown in a Web Worker, so image path resolution happens in the main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`
+
+### Editor Store (`src/lib/editor-store.ts`)
+
+Zustand store managing all editor state. Key interface:
 
 ```typescript
 interface FileNode {
@@ -175,11 +201,6 @@ Scroll position methods (per-file):
 ### File Operations (`src/lib/file-operations.ts`)
 - `importFiles()` - Uses Tauri dialog plugin to select .md/.pdf files; PDFs use `convertFileSrc` for streaming
 - File reads via `invoke("read_file")`, writes via `invoke("write_file")`
-
-### Additional Utilities
-- `src/lib/search-utils.ts` - Search functionality helpers
-- `src/lib/code-highlighting.ts` - Code syntax highlighting
-- `src/workers/` - Web workers for background processing
 
 ## Keyboard Shortcuts
 
@@ -220,30 +241,17 @@ Scroll position methods (per-file):
 | `src/lib/editor-store.ts` | Zustand store - all editor state |
 | `src/lib/file-operations.ts` | File import via Tauri dialog |
 | `src/lib/image-utils.ts` | Image path resolution and tag building |
-| `src/lib/markdown-render.ts` | Markdown-to-HTML rendering |
-| `src/lib/search-utils.ts` | Search functionality helpers |
+| `src/lib/markdown-render.ts` | Markdown-to-HTML rendering (Split mode) |
 | `src/components/editor/index.tsx` | Main layout + global keyboard shortcuts |
-| `src/components/editor/editor-area.tsx` | Editor area container |
-| `src/components/editor/sidebar.tsx` | File tree sidebar container |
-| `src/components/editor/file-tree.tsx` | File tree with drag-drop support |
-| `src/components/editor/title-bar.tsx` | Title bar with menu, update dialog, window controls |
 | `src/components/editor/split-editor.tsx` | Split view with percentage-based scroll sync |
-| `src/components/editor/markdown-renderer.tsx` | Markdown preview renderer (immediate on switch, deferred on edit) |
+| `src/components/editor/markdown-renderer.tsx` | Markdown preview renderer + image path resolution |
 | `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
-| `src/components/editor/blocks/types.ts` | Block and BlockType definitions |
-| `src/components/editor/blocks/utils.ts` | Markdown parsing and serialization |
-| `src/components/editor/pdf-renderer.tsx` | PDF.js renderer (备用，当前使用原生 embed) |
-| `src/components/editor/close-confirm-dialog.tsx` | Close confirmation for unsaved changes |
-| `src/components/editor/update-dialog.tsx` | Update download and installation dialog |
-| `src/components/editor/outline.tsx` | Markdown outline/toc |
-| `src/components/editor/status-bar.tsx` | Status bar with word/char counts |
+| `src/components/editor/blocks/utils.ts` | Markdown parsing (WYSIWYG mode) |
 | `src/workers/markdown-render-worker.ts` | Web worker for markdown rendering |
 | `src-tauri/src/lib.rs` | Rust commands: file I/O, updates, CLI, window close |
 | `src-tauri/src/main.rs` | Rust entry point |
 | `src-tauri/tauri.conf.json` | App window, bundle, file associations |
-| `vite.config.ts` | Vite + Tailwind CSS 4 setup |
-| `src/index.css` | Theme CSS variables (light/dark) + editor styles |
 
 ## Additional Documentation
 

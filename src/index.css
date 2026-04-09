@@ -201,3 +201,8 @@
   position: fixed !important;
   z-index: 999999999 !important;
 }
+
+/* Override Tailwind's svg fill:currentColor for Mermaid diagrams to preserve inline fill attributes */
+.mermaid-diagram svg {
+  fill: inherit !important;
+}
