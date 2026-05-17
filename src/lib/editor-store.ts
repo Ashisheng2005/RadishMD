@@ -98,6 +98,7 @@ interface EditorState {
   toggleFolder: (id: string) => void
   updateCounts: (content: string) => void
   addFiles: (files: FileNode[]) => void
+  addTreeNodes: (newNodes: FileNode[]) => void
   findNodeById: (id: string) => FileNode | null
   findNodeByPath: (filePath: string) => FileNode | null
   activateFileById: (id: string) => void
@@ -205,6 +206,55 @@ function updateFileInNodes(
 
     return node
   })
+}
+
+function mergeTreeNodes(existing: FileNode[], incoming: FileNode[]): FileNode[] {
+  const result: FileNode[] = [...existing]
+
+  for (const incomingNode of incoming) {
+    if (incomingNode.type === "folder") {
+      const existingFolder = findFolderByPath(result, incomingNode.filePath)
+      if (existingFolder) {
+        existingFolder.children = mergeTreeNodes(
+          existingFolder.children || [],
+          incomingNode.children || [],
+        )
+        existingFolder.isExpanded = true
+      } else {
+        result.push(incomingNode)
+      }
+    } else {
+      if (!findFileByPath(result, incomingNode.filePath)) {
+        result.push(incomingNode)
+      }
+    }
+  }
+
+  return result
+}
+
+function findFolderByPath(nodes: FileNode[], filePath?: string): FileNode | null {
+  if (!filePath) return null
+  for (const node of nodes) {
+    if (node.type === "folder" && node.filePath === filePath) return node
+    if (node.children) {
+      const found = findFolderByPath(node.children, filePath)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+function findFileByPath(nodes: FileNode[], filePath?: string): FileNode | null {
+  if (!filePath) return null
+  for (const node of nodes) {
+    if (node.type === "file" && node.filePath === filePath) return node
+    if (node.children) {
+      const found = findFileByPath(node.children, filePath)
+      if (found) return found
+    }
+  }
+  return null
 }
 
 export const useEditorStore = create<EditorState>((set, get) => ({
@@ -411,6 +461,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       return [...nodes, ...newFiles]
     }
     set((state) => ({ files: addFilesToRoot(state.files, files) }))
+  },
+
+  addTreeNodes: (newNodes: FileNode[]) => {
+    set((state) => ({
+      files: mergeTreeNodes(state.files, newNodes),
+    }))
   },
 
   findNodeById: (id: string) => {

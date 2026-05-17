@@ -47,7 +47,14 @@ npm run release:notes  # Generate release notes between tags
 - **sonner** for toast notifications
 - **pdfjs-dist** for PDF rendering (optional, currently uses native WebView embed)
 
-> **Note**: Sonner toasts require a CSS fix in `src/index.css` for production builds. Sonner's `:where()` selector has 0 specificity and gets overridden by Tailwind CSS 4 base styles. See line ~200 in `src/index.css`: `[data-sonner-toaster] { position: fixed !important; z-index: 999999999 !important; }`
+> **Note**: Sonner toasts require a CSS fix in `src/index.css` for production builds. Sonner's `:where()` selector has 0 specificity and gets overridden by Tailwind CSS 4 base styles. See `src/index.css`: `[data-sonner-toaster] { position: fixed !important; z-index: 999999999 !important; }`
+
+### Content Security Policy (CSP)
+Tauri CSP is configured in `tauri.conf.json` under `app.security.csp`. If adding new resources (fonts, images, stylesheets), ensure the corresponding CSP directive is updated:
+- `font-src` - must include `data:` for inline fonts
+- `style-src` - must include `'unsafe-inline'` for inline styles
+- `img-src` - must include `data:` and `https:` for external images
+- CSP violations in production build cause fonts/styles to be blocked, resulting in rendering issues (e.g., black SVG fills)
 
 ### Backend (Rust)
 - **Tauri 2** with plugins: `opener`, `dialog`, `cli`
@@ -55,12 +62,13 @@ npm run release:notes  # Generate release notes between tags
 - **Update downloads**: Uses `reqwest` blocking client with cancellation support via `DownloadCancellationRegistry`
 - Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
 - Commands in `src-tauri/src/lib.rs`:
-  - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`, `read_file_as_data_url`
+  - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`, `read_file_as_data_url`, `read_directory`
   - Image: `read_image_as_data_url`
   - CLI: `get_cli_file_path` for file associations
   - File watching: `watch_file_changes`, `clear_file_watcher`
   - Updates: `check_latest_release`, `download_release_asset`, `cancel_download`
   - Window: `confirm_close` - Closes window after user confirms unsaved changes
+- Custom Tauri event URIs: `radishmd://file-changed`, `radishmd://file-opened`, `radishmd://close-requested`, `radishmd://update-download-progress`
 
 ### Asset Protocol
 - **Tauri asset protocol** enabled in `tauri.conf.json` for streaming local files
@@ -81,6 +89,14 @@ When fixing parsing bugs (list continuation, blockquote merging, etc.), both fil
 - **Split mode**: Worker cannot use `convertFileSrc` (references `window`). Image path resolution happens in main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`.
 - **WYSIWYG mode**: Direct `resolveImageSource()` call since it runs in main thread.
 - **Critical**: `buildImageTag()` does NOT call `resolveImageSource()` - path resolution is done by the caller.
+
+#### Image Matching
+Only standard `![alt](url)` syntax is matched. Shorthand `!...()` patterns are NOT matched to avoid false positives (e.g., `messages! Consider for verbose mode (-v)` being incorrectly treated as an image).
+
+```typescript
+// Only matches: ![alt](url)
+result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, ...)
+```
 
 #### HTML Escaping Order for Images
 In `markdown-render.ts`, image regex must run BEFORE HTML escaping to preserve `&` in URLs:
@@ -187,11 +203,15 @@ interface FileNode {
 
 Key store methods:
 - `saveFile()` - Direct save for files with `filePath`, Save As for new files
-- `openFileFromPath(filePath)` - Opens file via CLI file association
+- `openFileFromPath(filePath)` - Opens file from absolute path (CLI file association, macOS "Open With")
 - `setContent(content)` - Updates content and recalculates word/char counts via `updateCounts()`
-- `hasUnsavedChanges()` - Check if any file has unsaved changes
-- `getUnsavedFiles()` - Get list of files with unsaved changes
+- `hasUnsavedChanges()` / `getUnsavedFiles()` - Check for unsaved changes (used by close confirmation)
+- `findNodeByPath(filePath)` - Recursively search by normalized file path (used for deduplication)
+- `addFiles(files)` - Append flat FileNode array to root tree
+- `addTreeNodes(newNodes)` - Merge nested tree nodes preserving existing folders by `filePath`
 - `watchFileChanges(filePath)` / `clearFileWatcher()` - File watching via Rust backend
+- `checkActiveFileForExternalChanges()` - Called on window focus, visibility change, and file watcher events
+- `moveNode(nodeId, targetFolderId)` - Drag-and-drop reorganization in tree
 
 Scroll position methods (per-file):
 - `saveScrollPosition(fileId, editorScroll, previewScroll)` - Save scroll as percentage
@@ -200,7 +220,7 @@ Scroll position methods (per-file):
 
 ### File Operations (`src/lib/file-operations.ts`)
 - `importFiles()` - Uses Tauri dialog plugin to select .md/.pdf files; PDFs use `convertFileSrc` for streaming
-- File reads via `invoke("read_file")`, writes via `invoke("write_file")`
+- `openFolder()` - Opens directory picker, recursively scans via `invoke("read_directory")`, builds folder tree preserving directory structure, reads all file contents, merges into store via `addTreeNodes()`
 
 ## Keyboard Shortcuts
 
@@ -232,6 +252,7 @@ Scroll position methods (per-file):
 - File associations: `.md` files open with RadishMD
 - Asset protocol: enabled with `scope: ["**"]` for PDF streaming
 - Permissions: `src-tauri/capabilities/default.json`
+- Devtools: enabled via `devtools: true` in `tauri.conf.json` windows config (for debugging only, disable in production)
 
 ## Key Files
 
@@ -249,9 +270,19 @@ Scroll position methods (per-file):
 | `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
 | `src/components/editor/blocks/utils.ts` | Markdown parsing (WYSIWYG mode) |
 | `src/workers/markdown-render-worker.ts` | Web worker for markdown rendering |
-| `src-tauri/src/lib.rs` | Rust commands: file I/O, updates, CLI, window close |
+| `src/lib/runtime.ts` | Tauri runtime detection (`isTauriRuntime()`) and external link opening |
+| `src/lib/search-utils.ts` | Full-text search across loaded files (name, path, content scoring) |
+| `src/lib/code-highlighting.ts` | Custom syntax highlighter for 18 languages (used in code blocks) |
+| `src/lib/update.ts` | Auto-update command wrappers (version check, download, cancel) |
+| `src-tauri/src/lib.rs` | All 15 Rust commands: file I/O, directory scan, updates, CLI, window close |
 | `src-tauri/src/main.rs` | Rust entry point |
-| `src-tauri/tauri.conf.json` | App window, bundle, file associations |
+| `src-tauri/tauri.conf.json` | App window, bundle, file associations, CSP |
+| `scripts/sync-version.mjs` | Version sync script (auto-runs via `predev`/`prebuild`/`prepreview` hooks) |
+| `scripts/generate-release-notes.mjs` | Release notes generation from conventional commits |
+
+### Runtime Detection (`src/lib/runtime.ts`)
+- `isTauriRuntime()` checks for `window.__TAURI_INTERNALS__` — used to conditionally enable Tauri-specific features (file operations, watcher, CLI args)
+- `openExternalTarget(url)` — opens URLs via Tauri `opener` plugin, falls back to `window.open()`
 
 ## Additional Documentation
 
@@ -259,3 +290,7 @@ Detailed documentation in Chinese available in `docx/`:
 - `docx/使用手册.md` - User manual
 - `docx/开发者手册.md` - Developer guide with environment setup
 - `docx/Split模式滚动同步方案.md` - Split mode scroll sync implementation details
+
+## Testing
+
+**No test infrastructure exists.** There are no test runners or test files configured. All verification is manual via `npm run tauri dev`.

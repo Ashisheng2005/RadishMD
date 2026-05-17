@@ -1,10 +1,10 @@
-import { Search, Import, FilePlus, FolderPlus } from "lucide-react"
+import { Search, Import, FilePlus, FolderPlus, Folder } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useEditorStore } from "@/lib/editor-store"
 import { FileTree } from "./file-tree"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { importFiles } from "@/lib/file-operations"
+import { importFiles, openFolder } from "@/lib/file-operations"
 
 export function Sidebar() {
   const { isSidebarOpen, startCreating } = useEditorStore()
@@ -35,6 +35,9 @@ export function Sidebar() {
             文件
           </span>
           <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => openFolder()}>
+              <Folder className="h-3.5 w-3.5" />
+            </Button>
             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => importFiles()}>
               <Import className="h-3.5 w-3.5" />
             </Button>

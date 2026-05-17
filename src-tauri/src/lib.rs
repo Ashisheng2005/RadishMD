@@ -108,6 +108,32 @@ impl DownloadCancellationRegistry {
     }
 }
 
+fn read_dir_recursive(dir: &std::path::PathBuf, files: &mut Vec<String>) -> std::io::Result<()> {
+    if dir.is_dir() {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                read_dir_recursive(&path, files)?;
+            } else if path.is_file() {
+                files.push(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn read_directory(path: String) -> Result<Vec<String>, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+    let mut files = Vec::new();
+    read_dir_recursive(&dir, &mut files).map_err(|e| e.to_string())?;
+    Ok(files)
+}
+
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
@@ -523,6 +549,7 @@ pub fn run() {
             read_file_snapshot,
             write_file,
             get_file_name,
+            read_directory,
             read_image_as_data_url,
             read_file_as_data_url,
             get_cli_file_path,
