@@ -126,13 +126,6 @@ async function renderMermaidInContainer(container: HTMLElement) {
 
   ensureMermaidInitialized()
 
-  // Update theme if dark mode changed
-  const isDark = document.documentElement.classList.contains("dark")
-  mermaid.initialize({
-    startOnLoad: false,
-    theme: isDark ? "dark" : "base",
-  })
-
   const renders: Promise<void>[] = []
   mermaidDivs.forEach((div) => {
     const id = div.getAttribute("data-mermaid-id")
@@ -148,7 +141,12 @@ async function renderMermaidInContainer(container: HTMLElement) {
         })
         .catch((err) => {
           console.error("[RadishMD] mermaid render error", err)
-          div.innerHTML = `<pre class="text-red-500 whitespace-pre-wrap">${escapeHtml(encodedContent)}</pre>`
+          const errorMsg = err instanceof Error ? err.message : String(err)
+          div.innerHTML = `<div class="mermaid-error p-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20 my-2">
+  <p class="text-sm font-medium text-red-600 dark:text-red-400 mb-1">⚠️ 流程图渲染失败</p>
+  <p class="text-xs text-red-500/80 mb-2 font-mono">${escapeHtml(errorMsg)}</p>
+  <pre class="text-xs text-red-500 whitespace-pre-wrap border-t border-red-200 dark:border-red-800 pt-2 mt-1">${escapeHtml(encodedContent)}</pre>
+</div>`
         })
     )
   })

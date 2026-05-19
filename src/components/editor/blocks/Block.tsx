@@ -7,6 +7,18 @@ import { renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
 import type { Block } from "./types"
 import mermaid from "mermaid"
 
+// Module-level mermaid initialization flag (prevent re-init on every render)
+let mermaidWysiwygInitialized = false
+function ensureMermaidWysiwygInitialized() {
+  if (mermaidWysiwygInitialized) return
+  const isDark = document.documentElement.classList.contains("dark")
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: isDark ? "dark" : "base",
+  })
+  mermaidWysiwygInitialized = true
+}
+
 interface BlockProps {
   block: Block
   isActive: boolean
@@ -73,13 +85,16 @@ export function Block({
   useEffect(() => {
     if (block.type !== "mermaid" || isEditing) return
 
-    const isDark = document.documentElement.classList.contains("dark")
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: isDark ? "dark" : "base",
-    })
+    // Empty content check
+    if (!block.content.trim()) {
+      setMermaidSvg(`<p class="text-muted-foreground text-sm italic">（空流程图）</p>`)
+      return
+    }
+
+    ensureMermaidWysiwygInitialized()
 
     const chartId = `mermaid-wysiwyg-${block.id}`
+    setMermaidSvg(`<p class="text-muted-foreground text-sm">正在渲染流程图...</p>`)
 
     mermaid
       .render(chartId, block.content)
@@ -88,7 +103,12 @@ export function Block({
       })
       .catch((err) => {
         console.error("[RadishMD] mermaid render error:", err)
-        setMermaidSvg(`<pre class="text-red-500">${block.content}</pre>`)
+        const errorMsg = err instanceof Error ? err.message : String(err)
+        setMermaidSvg(`<div class="mermaid-error p-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20 my-2">
+  <p class="text-sm font-medium text-red-600 dark:text-red-400 mb-1">⚠️ 流程图渲染失败</p>
+  <p class="text-xs text-red-500/80 mb-2 font-mono">${errorMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>
+  <pre class="text-xs text-red-500 whitespace-pre-wrap border-t border-red-200 dark:border-red-800 pt-2 mt-1">${block.content}</pre>
+</div>`)
       })
   }, [block.type, block.id, block.content, isEditing])
 
@@ -221,7 +241,7 @@ export function Block({
     if (block.type === "table") {
       return (
         <div
-          dangerouslySetInnerHTML={{ __html: parseTableMarkdownToHtml(normalizedContent) }}
+          dangerouslySetInnerHTML={{ __html: parseTableMarkdownToHtml(normalizedContent, baseFilePath) }}
         />
       )
     }

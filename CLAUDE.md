@@ -10,21 +10,22 @@ RadishMD is a Tauri 2 desktop application with a React + TypeScript frontend. It
 
 ```bash
 # Frontend only
-npm run dev        # Start Vite dev server (port 1420)
-npm run build      # TypeScript check + Vite build
-npm run preview    # Preview built frontend
+npm run dev              # Start Vite dev server (port 1420)
+npm run build            # TypeScript check + Vite build
+npm run preview          # Preview built frontend
 
 # Tauri (full app)
-npm run tauri dev      # Run with Rust backend + frontend (port 1421 for HMR)
-npm run dev:tauri      # Alternative: dev server on port 1421 with strictPort
-npm run tauri build    # Build production .exe
+npm run tauri dev        # Run with Rust backend + frontend (port 1421 for HMR)
+npm run dev:tauri        # Alternative: dev server on port 1421 with strictPort
+npm run tauri build      # Build production .exe
+npm run tauri            # Tauri CLI passthrough (e.g. `npm run tauri -- --help`)
 
-# Version management (auto-runs before build/dev)
-npm run version:sync   # Sync version to tauri.conf.json and Cargo.toml
-npm run version:check  # Check if versions are in sync
+# Version management (auto-runs before build/dev via pre* hooks)
+npm run version:sync     # Sync version to tauri.conf.json and Cargo.toml
+npm run version:check    # Check if versions are in sync
 
 # Release notes (generates from conventional commits)
-npm run release:notes  # Generate release notes between tags
+npm run release:notes    # Generate release notes between tags
 ```
 
 ## Environment Requirements
@@ -42,185 +43,187 @@ npm run release:notes  # Generate release notes between tags
 - **Tailwind CSS 4** with CSS variables (`@tailwindcss/vite` plugin)
 - **shadcn/ui** component library (radix-ui primitives)
 - **Zustand** for state management
-- **KaTeX** for math formula rendering (both inline `$...$` and block `$$...$$`)
-- **Mermaid** for diagram rendering (` ```mermaid ` code blocks)
+- **CodeMirror 6** - used in Split mode for the code editor pane (`@codemirror/lang-markdown`, custom theme)
+- **KaTeX** for math formula rendering
+- **Mermaid** for diagram rendering
 - **sonner** for toast notifications
-- **pdfjs-dist** for PDF rendering (optional, currently uses native WebView embed)
 
-> **Note**: Sonner toasts require a CSS fix in `src/index.css` for production builds. Sonner's `:where()` selector has 0 specificity and gets overridden by Tailwind CSS 4 base styles. See `src/index.css`: `[data-sonner-toaster] { position: fixed !important; z-index: 999999999 !important; }`
+### App Entry
 
-### Content Security Policy (CSP)
-Tauri CSP is configured in `tauri.conf.json` under `app.security.csp`. If adding new resources (fonts, images, stylesheets), ensure the corresponding CSP directive is updated:
-- `font-src` - must include `data:` for inline fonts
-- `style-src` - must include `'unsafe-inline'` for inline styles
-- `img-src` - must include `data:` and `https:` for external images
-- CSP violations in production build cause fonts/styles to be blocked, resulting in rendering issues (e.g., black SVG fills)
-
-### Backend (Rust)
-- **Tauri 2** with plugins: `opener`, `dialog`, `cli`
-- **File watching**: Uses `notify` crate to watch for external file changes, emits `radishmd://file-changed` events to frontend
-- **Update downloads**: Uses `reqwest` blocking client with cancellation support via `DownloadCancellationRegistry`
-- Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
-- Commands in `src-tauri/src/lib.rs`:
-  - File: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`, `read_file_as_data_url`, `read_directory`
-  - Image: `read_image_as_data_url`
-  - CLI: `get_cli_file_path` for file associations
-  - File watching: `watch_file_changes`, `clear_file_watcher`
-  - Updates: `check_latest_release`, `download_release_asset`, `cancel_download`
-  - Window: `confirm_close` - Closes window after user confirms unsaved changes
-- Custom Tauri event URIs: `radishmd://file-changed`, `radishmd://file-opened`, `radishmd://close-requested`, `radishmd://update-download-progress`
-
-### Asset Protocol
-- **Tauri asset protocol** enabled in `tauri.conf.json` for streaming local files
-- `convertFileSrc(path)` from `@tauri-apps/api/core` generates `asset://localhost/<path>` URLs
-- Used for PDF viewing - WebView natively streams and renders PDFs via `<embed src={assetUrl}>`
-- Bypasses WebView's `file://` security restrictions
-
-### Important Code Patterns
-
-#### Dual Markdown Parsing Implementations
-Markdown parsing has **two separate implementations** that must be kept in sync:
-- `src/lib/markdown-render.ts` - Used by **Split mode** preview rendering (runs in Web Worker)
-- `src/components/editor/blocks/utils.ts` - Used by **WYSIWYG mode** parsing
-
-When fixing parsing bugs (list continuation, blockquote merging, etc.), both files need updates.
-
-#### Image Path Resolution
-- **Split mode**: Worker cannot use `convertFileSrc` (references `window`). Image path resolution happens in main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`.
-- **WYSIWYG mode**: Direct `resolveImageSource()` call since it runs in main thread.
-- **Critical**: `buildImageTag()` does NOT call `resolveImageSource()` - path resolution is done by the caller.
-
-#### Image Matching
-Only standard `![alt](url)` syntax is matched. Shorthand `!...()` patterns are NOT matched to avoid false positives (e.g., `messages! Consider for verbose mode (-v)` being incorrectly treated as an image).
-
-```typescript
-// Only matches: ![alt](url)
-result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, ...)
+```
+src/main.tsx                     # ReactDOM.createRoot + StrictMode
+src/App.tsx                      # Renders <Editor /> + <Toaster />
+src/components/editor/index.tsx  # Main layout: TitleBar, Sidebar, EditorArea, Outline, StatusBar
 ```
 
-#### HTML Escaping Order for Images
-In `markdown-render.ts`, image regex must run BEFORE HTML escaping to preserve `&` in URLs:
-```typescript
-// Process images BEFORE HTML escaping to preserve & in URLs
-result = result.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, ...)
-result = result.replace(/&/g, "&amp;") // HTML escape happens AFTER
-```
+**Important**: React StrictMode is enabled in development, which double-mounts components. Effects (especially event listeners, file watchers, workers) must have proper cleanup functions.
 
-#### List Continuation Pattern
-List continuation lines use 2+ spaces/tabs but must exclude code block markers:
-```typescript
-if (/^[ \t]{2,}/.test(nextLine) && !nextTrimmed.startsWith("```")) {
-  // This is a continuation line
-}
-```
+### Editor Modes (`EditorArea.tsx`)
+The editor has two modes selected by `editMode` in the store:
+- **`"split"`** → Renders `SplitEditor`: CodeMirror editor (left) + Markdown preview (right). Also used for PDF files.
+- **`"wysiwyg"`** → Renders `WysiwygEditor`: Block-based editor where blocks are parsed from markdown.
 
-### Markdown Rendering (Two Implementations)
+### Theme System
 
-**Important**: See "Dual Markdown Parsing Implementations" in Important Code Patterns above.
-
-### Mermaid Diagrams
-Mermaid diagrams are rendered via `mermaid.render()` in the main thread:
-- **Split mode**: `markdown-renderer.tsx` uses placeholder divs with `renderMermaidInContainer()`
-- **WYSIWYG mode**: `Block.tsx` uses `mermaidSvg` state with `useEffect` for rendering
-- Theme adapts to light/dark mode via `document.documentElement.classList.contains("dark")`
-
-### Split Editor Scroll Sync
-- Uses **percentage-based scroll sync** (`split-editor.tsx`)
-- Syncs by scroll percentage (`scrollTop / scrollableHeight`) rather than delta
-- Uses `useDeferredValue` for smooth input during rendering
-- **ResizeObserver** monitors preview height changes and corrects sync when rendering stabilizes
-- Throttled at 50ms to avoid excessive recalculations during fast scrolling
-- **PDF mode**: Scroll sync is disabled to prevent flickering during native PDF rendering
-- This approach handles content height differences between editor (textarea) and preview (HTML) more accurately than delta-based sync
-
-### Per-File Scroll Position
-Each file maintains its own scroll position (percentage-based) in `editor-store`:
-- `fileScrollPositions` - Record of file IDs to `{ editor: number, preview: number }`
-- `saveScrollPosition()` / `getScrollPosition()` - Save/restore scroll per file
-- `shouldResetScroll` - Flag to reset scroll to top (used when importing new files)
-- File switch: saves current position → restores target file position
-- Import new file: resets to top (0%) instead of restoring
+CSS variables in `src/index.css` define the full color palette for both `.dark` and light (default) themes. Theme mode (`"light"`, `"dark"`, `"system"`) is stored in Zustand and applied in `Editor/index.tsx` via `document.documentElement.classList.toggle("dark", ...)`. The `@custom-variant dark (&:is(.dark *));` Tailwind directive enables `dark:` variants based on the `.dark` class.
 
 ### Layout Structure
 ```
-TitleBar (with menu, update dialog, window controls)
-├── Sidebar (file tree, collapsible)
+TitleBar (menu, update dialog, window controls)
+├── Sidebar (collapsible file tree, search)
 ├── EditorArea
-│   ├── SplitEditor (textarea + preview + CodeMirror)
+│   ├── SplitEditor (CodeMirror editor + Markdown preview)
 │   └── WysiwygEditor (block-based editor)
-├── Outline (markdown outline, collapsible)
+├── Outline (collapsible markdown outline)
 └── StatusBar
 ```
 
-### WYSIWYG Editor Architecture (`wysiwyg-editor.tsx`)
+### Backend (Rust)
+- **Tauri 2** with plugins: `opener`, `dialog`, `cli`
+- Entry: `src-tauri/src/main.rs` → `radishmd_lib::run()`
+- All commands in `src-tauri/src/lib.rs` (2 source files total)
+- **File watching**: Uses `notify` crate, emits `radishmd://file-changed` events
+- **Update downloads**: `reqwest` blocking client with `DownloadCancellationRegistry`
+- Github repo owner: `Ashisheng2005`, repo: `RadishMD`
 
-The WYSIWYG editor uses a **component-based approach** with controlled inputs:
+### Custom Tauri Event URIs
+| Event | Purpose |
+|-------|---------|
+| `radishmd://file-changed` | External file modification detected |
+| `radishmd://file-opened` | File opened via OS file association |
+| `radishmd://close-requested` | Window close attempt (check unsaved) |
+| `radishmd://update-download-progress` | Download progress updates |
 
-1. **Markdown → Blocks**: `parseMarkdownToBlocks(markdown)` in `blocks/utils.ts` splits content into `Block[]`
-   - Block types: `paragraph`, `heading1-6`, `code`, `quote`, `list`, `ordered`, `task`, `hr`, `table`
+### Content Security Policy (CSP)
+Configured in `tauri.conf.json` under `app.security.csp`. When adding new external resources (fonts, images, stylesheets), update the corresponding CSP directive. CSP violations in production build silently block resources (black SVG fills, missing fonts, etc.).
 
-2. **Block Components** (`components/editor/blocks/`):
-   - `Block.tsx` - Unified block component with edit/render modes (uses `renderCodeBlockInnerHtml` for code syntax highlighting)
-   - `types.ts` - Block and BlockType definitions
-   - `utils.ts` - parseMarkdownToBlocks, blocksToMarkdown, renderInlineMarkdown
+### Asset Protocol
+- **Tauri asset protocol** enabled for streaming local files (`asset://localhost/<path>`)
+- `convertFileSrc(path)` from `@tauri-apps/api/core` generates asset URLs
+- Used for PDF viewing via `<embed src={assetUrl}>`
+- Bypasses WebView's `file://` security restrictions
 
-3. **Edit/Render Mode Toggle**:
-   - Click block → enters edit mode (shows textarea)
-   - Blur/Escape → exits edit mode, syncs content
-   - Uses `localContent` state with 300ms debounce for smooth input
+### Runtime Detection (`src/lib/runtime.ts`)
+- `isTauriRuntime()` checks for `window.__TAURI_INTERNALS__` — used to conditionally enable Tauri features (file operations, watcher, CLI)
+- `openExternalTarget(url)` — opens URLs via Tauri `opener` plugin, falls back to `window.open()`
 
-4. **Performance Optimizations**:
-   - Each Block maintains local state to avoid global re-renders
-   - 300ms debounce on text input updates
-   - CSS `content-visibility: auto` on block containers for lazy rendering
-   - Markdown-to-markdown sync only on internal updates
+### Vite Configuration (`vite.config.ts`)
+- Server: port 1420, strict port, ignores `src-tauri/**` and `*.md` file changes (preventing reload on markdown saves)
 
-5. **Image Handling** (`src/lib/image-utils.ts`):
-   - `resolveImageSource()` - Converts local image paths to Tauri asset URLs (`asset://localhost/...`). Handles relative paths by combining with `baseFilePath` directory, and passes through absolute URLs, data URIs, and existing asset URLs unchanged
-   - `buildImageTag()` - Builds `<img>` tag (does NOT resolve paths - caller handles resolution)
-   - `parseImageReference()` - Parses markdown image syntax `![alt](src)`
-   - **Important**: Split mode renders markdown in a Web Worker, so image path resolution happens in the main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx`
+---
 
-### Editor Store (`src/lib/editor-store.ts`)
+## State Management (`src/lib/editor-store.ts`)
 
-Zustand store managing all editor state. Key interface:
+Zustand store managing all editor state. Key concepts:
 
-```typescript
-interface FileNode {
-  id: string
-  name: string
-  type: "file" | "folder"
-  children?: FileNode[]
-  content?: string
-  isExpanded?: boolean
-  filePath?: string
-  sourceModified?: number | null
-  isDirty?: boolean          // Modified after save
-  isNew?: boolean            // Created in-page, never saved
-  hasExternalChanges?: boolean
-}
-```
+**File Tree**: `files: FileNode[]` is a recursive tree structure (files + folders). Every file has a unique `id`. Files created in-page (never saved) have `isNew: true`. Files modified after save have `isDirty: true`.
 
-Key store methods:
-- `saveFile()` - Direct save for files with `filePath`, Save As for new files
-- `openFileFromPath(filePath)` - Opens file from absolute path (CLI file association, macOS "Open With")
-- `setContent(content)` - Updates content and recalculates word/char counts via `updateCounts()`
-- `hasUnsavedChanges()` / `getUnsavedFiles()` - Check for unsaved changes (used by close confirmation)
-- `findNodeByPath(filePath)` - Recursively search by normalized file path (used for deduplication)
-- `addFiles(files)` - Append flat FileNode array to root tree
-- `addTreeNodes(newNodes)` - Merge nested tree nodes preserving existing folders by `filePath`
-- `watchFileChanges(filePath)` / `clearFileWatcher()` - File watching via Rust backend
-- `checkActiveFileForExternalChanges()` - Called on window focus, visibility change, and file watcher events
-- `moveNode(nodeId, targetFolderId)` - Drag-and-drop reorganization in tree
+**Active File**: `activeFileId` points to the current file. `content` is the current editor content (always synced with active file). Switch files via `setActiveFile(id)`.
 
-Scroll position methods (per-file):
-- `saveScrollPosition(fileId, editorScroll, previewScroll)` - Save scroll as percentage
-- `getScrollPosition(fileId)` - Get saved scroll position for a file
-- `setShouldResetScroll(value)` - Set flag to reset scroll to top on next switch
+**Key operations**:
+- `saveFile()` - Direct save for files with `filePath`, opens Save As dialog for new files
+- `addFiles(files)` / `addTreeNodes(newNodes)` - Add files to tree (merges nested nodes preserving existing folders by `filePath`)
+- `moveNode(nodeId, targetFolderId)` - Drag-and-drop tree reorganization
+- `findNodeByPath(filePath)` - Recursive search by normalized file path for deduplication
+- `hasUnsavedChanges()` / `getUnsavedFiles()` - Unsaved changes tracking (used by close confirmation dialog)
 
-### File Operations (`src/lib/file-operations.ts`)
-- `importFiles()` - Uses Tauri dialog plugin to select .md/.pdf files; PDFs use `convertFileSrc` for streaming
-- `openFolder()` - Opens directory picker, recursively scans via `invoke("read_directory")`, builds folder tree preserving directory structure, reads all file contents, merges into store via `addTreeNodes()`
+**Scroll positions**: Per-file percentage-based (`fileScrollPositions: Record<string, { editor: number, preview: number }>`)
+
+---
+
+## Markdown Rendering (Two Separate Implementations)
+
+**Critical: Both files must be kept in sync when fixing parsing bugs.**
+
+- `src/lib/markdown-render.ts` — Used by **Split mode** preview (runs in Web Worker)
+- `src/components/editor/blocks/utils.ts` — Used by **WYSIWYG mode** block parsing
+
+Dual implementations exist because the WYSIWYG version needs per-block React component integration (edit/render mode toggle), while the Split version is a simple batch render.
+
+### Block Types
+Both parsers produce blocks: `paragraph`, `heading1-6`, `code`, `mermaid`, `quote`, `list`, `ordered`, `task`, `hr`, `table`
+
+### Image Path Resolution
+- **Split mode**: Worker cannot use `convertFileSrc` (references `window`). Path resolution happens in main thread via `resolveImagePathsInHtml()` in `markdown-renderer.tsx` after the worker returns HTML chunks.
+- **WYSIWYG mode**: `renderInlineMarkdown()` calls `resolveImageSource()` directly (runs in main thread).
+- **`buildImageTag()` does NOT resolve paths** — only builds the `<img>` tag with the raw src. Resolution is done by the caller.
+
+### Math Formula Rendering
+- **Split mode**: Placeholder-based. `renderInlineMarkdown` emits `%%MATH_INLINE:encoded%%` and `<div class="katex-display" data-math-block="...">`. These are replaced with actual KaTeX HTML in the main thread by `renderMathInHtml()` in `markdown-renderer.tsx`.
+- **WYSIWYG mode**: Direct. `renderInlineMarkdown` calls `katex.renderToString()` immediately for both inline `$...$` and block `$$...$$` formulas.
+
+### Mermaid Diagrams
+`mermaid.render()` runs only in the main thread (needs DOM):
+- **Split mode**: Worker emits placeholder `<div class="mermaid-diagram" data-mermaid-id="..." data-mermaid-content="...">`. After chunks are set in DOM, `renderMermaidInContainer()` in `markdown-renderer.tsx` finds all placeholders and calls `mermaid.render()` on each.
+- **WYSIWYG mode**: `Block.tsx` `useEffect` calls `mermaid.render()` directly with `block.content`, stores resulting SVG in state.
+
+---
+
+## WYSIWYG Editor Architecture
+
+`WysiwygEditor` → `blocks/utils.ts:parseMarkdownToBlocks()` → array of `Block[]` → `Block.tsx` component for each block.
+
+**Block component** (`src/components/editor/blocks/Block.tsx`):
+- Two modes: **view** (renders HTML via `renderInlineMarkdown`) and **edit** (shows `<textarea>`)
+- Click → edit mode, Blur/Escape → returns to view mode
+- `localContent` state + 300ms debounce prevents global re-renders on each keystroke
+- Uses `contentEditable` is NOT used — blocks use textarea for editing and `dangerouslySetInnerHTML` for rendering
+
+---
+
+## Split Editor Architecture
+
+`SplitEditor` (`src/components/editor/split-editor.tsx`):
+- **Editor pane**: `<textarea>` element (not CodeMirror — the CM dependency exists but the current implementation uses a native textarea)
+- **Preview pane**: `MarkdownRenderer` component
+- **Scroll sync**: Percentage-based (`scrollTop / scrollableHeight`), throttled at 50ms, using `useDeferredValue` for smooth input
+- **ResizeObserver** monitors preview height changes and corrects sync when rendering stabilizes
+- PDF mode disables scroll sync (prevents flickering)
+
+### MarkdownRenderer (`src/components/editor/markdown-renderer.tsx`)
+- Renders markdown to HTML using a **Web Worker** (`src/workers/markdown-render-worker.ts`)
+- Worker returns `MarkdownRenderChunk[]` (array of `{ key, html, sourceLine }`)
+- Main thread post-processes: resolves image paths, renders KaTeX formulas, renders Mermaid diagrams
+- 220ms debounce on input before sending to worker (immediate render on file switch)
+
+### Rust Commands (15 total in `src-tauri/src/lib.rs`)
+- **File I/O**: `read_file`, `read_file_snapshot`, `write_file`, `get_file_name`, `read_file_as_data_url`, `read_directory`
+- **Image**: `read_image_as_data_url`
+- **File watching**: `watch_file_changes`, `clear_file_watcher`
+- **CLI**: `get_cli_file_path`
+- **Updates**: `check_latest_release`, `download_release_asset`, `cancel_download`
+- **Window**: `confirm_close`
+
+---
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/lib/editor-store.ts` | Zustand store: file tree, content, UI state, scroll positions |
+| `src/lib/markdown-render.ts` | Markdown parser + HTML renderer (Split mode, worker-compatible) |
+| `src/components/editor/blocks/utils.ts` | Markdown parser + inline renderer (WYSIWYG mode) |
+| `src/components/editor/blocks/Block.tsx` | Block component with edit/render mode toggle |
+| `src/components/editor/markdown-renderer.tsx` | Preview renderer: worker orchestration, KaTeX/Mermaid/image post-processing |
+| `src/components/editor/split-editor.tsx` | Split view: textarea + preview + scroll sync |
+| `src/components/editor/wysiwyg-editor.tsx` | WYSIWYG block editor |
+| `src/components/editor/index.tsx` | Main layout, global keyboard shortcuts, theme, update logic |
+| `src/components/editor/file-tree.tsx` | File tree sidebar with drag-and-drop |
+| `src/components/editor/sidebar.tsx` | Sidebar container (file tree + search) |
+| `src/components/editor/toolbar.tsx` | Formatting toolbar (bold, italic, headings, etc.) |
+| `src/components/editor/outline.tsx` | Markdown outline (headings-based) |
+| `src/lib/image-utils.ts` | Image path resolution, tag building, clipboard extraction |
+| `src/lib/code-highlighting.ts` | Custom syntax highlighter for 18 languages |
+| `src/lib/search-utils.ts` | Full-text search across loaded files |
+| `src/lib/file-operations.ts` | File import/export via Tauri dialog |
+| `src/lib/runtime.ts` | Tauri runtime detection |
+| `src/lib/update.ts` | Auto-update command wrappers |
+| `src/workers/markdown-render-worker.ts` | Web Worker for markdown rendering |
+| `src/index.css` | Tailwind imports, CSS variables, theme, custom scrollbar, mermaid fixes |
+| `src-tauri/src/lib.rs` | All 15 Rust commands |
+| `src-tauri/tauri.conf.json` | CSP, window config, file associations, asset protocol |
+
+---
 
 ## Keyboard Shortcuts
 
@@ -242,55 +245,27 @@ Scroll position methods (per-file):
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+S` | Save file |
+| `Ctrl+/` | Toggle search |
 | `Ctrl+Shift+Z` | Toggle sidebar |
 | `Ctrl+Shift+X` | Toggle outline |
+| `Escape` | Close search |
 
 ## Tauri Configuration
 
 - App ID: `radishtools.radishmd.fun`
-- Window: 1200x800 default, 800x600 minimum, decorated
+- Window: 1200x800 default, 800x600 minimum
 - File associations: `.md` files open with RadishMD
-- Asset protocol: enabled with `scope: ["**"]` for PDF streaming
 - Permissions: `src-tauri/capabilities/default.json`
-- Devtools: enabled via `devtools: true` in `tauri.conf.json` windows config (for debugging only, disable in production)
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `src/main.tsx` | App entry point, close event handling |
-| `src/lib/editor-store.ts` | Zustand store - all editor state |
-| `src/lib/file-operations.ts` | File import via Tauri dialog |
-| `src/lib/image-utils.ts` | Image path resolution and tag building |
-| `src/lib/markdown-render.ts` | Markdown-to-HTML rendering (Split mode) |
-| `src/components/editor/index.tsx` | Main layout + global keyboard shortcuts |
-| `src/components/editor/split-editor.tsx` | Split view with percentage-based scroll sync |
-| `src/components/editor/markdown-renderer.tsx` | Markdown preview renderer + image path resolution |
-| `src/components/editor/wysiwyg-editor.tsx` | Block-based WYSIWYG editor |
-| `src/components/editor/blocks/Block.tsx` | Unified block component (edit/render modes) |
-| `src/components/editor/blocks/utils.ts` | Markdown parsing (WYSIWYG mode) |
-| `src/workers/markdown-render-worker.ts` | Web worker for markdown rendering |
-| `src/lib/runtime.ts` | Tauri runtime detection (`isTauriRuntime()`) and external link opening |
-| `src/lib/search-utils.ts` | Full-text search across loaded files (name, path, content scoring) |
-| `src/lib/code-highlighting.ts` | Custom syntax highlighter for 18 languages (used in code blocks) |
-| `src/lib/update.ts` | Auto-update command wrappers (version check, download, cancel) |
-| `src-tauri/src/lib.rs` | All 15 Rust commands: file I/O, directory scan, updates, CLI, window close |
-| `src-tauri/src/main.rs` | Rust entry point |
-| `src-tauri/tauri.conf.json` | App window, bundle, file associations, CSP |
-| `scripts/sync-version.mjs` | Version sync script (auto-runs via `predev`/`prebuild`/`prepreview` hooks) |
-| `scripts/generate-release-notes.mjs` | Release notes generation from conventional commits |
-
-### Runtime Detection (`src/lib/runtime.ts`)
-- `isTauriRuntime()` checks for `window.__TAURI_INTERNALS__` — used to conditionally enable Tauri-specific features (file operations, watcher, CLI args)
-- `openExternalTarget(url)` — opens URLs via Tauri `opener` plugin, falls back to `window.open()`
+- Devtools: `devtools: true` in tauri.conf.json (debug only, disable in production)
 
 ## Additional Documentation
 
-Detailed documentation in Chinese available in `docx/`:
-- `docx/使用手册.md` - User manual
-- `docx/开发者手册.md` - Developer guide with environment setup
-- `docx/Split模式滚动同步方案.md` - Split mode scroll sync implementation details
+Detailed Chinese documentation in `docx/`:
+- `docx/使用手册.md` — User manual
+- `docx/开发者手册.md` — Developer guide with environment setup
+- `docx/Split模式滚动同步方案.md` — Split mode scroll sync details
+- `docx/项目结构优化说明.md` — Architecture optimization notes
 
 ## Testing
 
-**No test infrastructure exists.** There are no test runners or test files configured. All verification is manual via `npm run tauri dev`.
+**No test infrastructure exists.** All verification is manual via `npm run tauri dev` or `npm run dev`.

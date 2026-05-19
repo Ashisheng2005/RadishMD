@@ -61,7 +61,7 @@ function isTableRowLine(line: string) {
   return line.includes("|") && line.trim().length > 0
 }
 
-function parseTableMarkdownToHtml(content: string) {
+function parseTableMarkdownToHtml(content: string, baseFilePath?: string | null) {
   const lines = content.split("\n").filter((line) => line.trim().length > 0)
 
   if (lines.length < 2 || !isTableSeparatorLine(lines[1])) {
@@ -73,7 +73,7 @@ function parseTableMarkdownToHtml(content: string) {
     .replace(/^\|/, "")
     .replace(/\|$/, "")
     .split("|")
-    .map((cell) => `<th class="border border-border px-3 py-2 text-left font-medium bg-muted">${escapeHtml(cell.trim())}</th>`)
+    .map((cell) => `<th class="border border-border px-3 py-2 text-left font-medium bg-muted">${renderInlineMarkdown(cell.trim(), baseFilePath)}</th>`)
     .join("")
 
   const bodyRows = lines.slice(2).map((row) => {
@@ -82,7 +82,7 @@ function parseTableMarkdownToHtml(content: string) {
       .replace(/^\|/, "")
       .replace(/\|$/, "")
       .split("|")
-      .map((cell) => `<td class="border border-border px-3 py-2 align-top">${escapeHtml(cell.trim())}</td>`)
+      .map((cell) => `<td class="border border-border px-3 py-2 align-top">${renderInlineMarkdown(cell.trim(), baseFilePath)}</td>`)
       .join("")
 
     return `<tr>${cells}</tr>`
@@ -354,7 +354,7 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
     case "hr":
       return '<hr class="my-8 border-border" />'
     case "table":
-      return parseTableMarkdownToHtml(block.content)
+      return parseTableMarkdownToHtml(block.content, activeFilePath)
     case "paragraph": {
       const trimmed = block.content.trim()
       const parsedImageReference = parseImageReference(trimmed, true)
