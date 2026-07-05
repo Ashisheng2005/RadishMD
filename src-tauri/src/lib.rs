@@ -67,6 +67,13 @@ struct FileSnapshot {
     modified: Option<u64>,
 }
 
+#[derive(Serialize)]
+struct DirectoryEntry {
+    name: String,
+    path: String,
+    is_directory: bool,
+}
+
 static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> = LazyLock::new(|| {
     Mutex::new(None)
 });
@@ -132,6 +139,50 @@ fn read_directory(path: String) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
     read_dir_recursive(&dir, &mut files).map_err(|e| e.to_string())?;
     Ok(files)
+}
+
+#[tauri::command]
+fn read_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path();
+        let metadata = entry.metadata().map_err(|e| e.to_string())?;
+
+        if !metadata.is_dir() && !metadata.is_file() {
+            continue;
+        }
+
+        let name = entry_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| entry_path.to_string_lossy().to_string());
+
+        entries.push(DirectoryEntry {
+            name,
+            path: entry_path.to_string_lossy().to_string(),
+            is_directory: metadata.is_dir(),
+        });
+    }
+
+    entries.sort_by(|left, right| {
+        right.is_directory
+            .cmp(&left.is_directory)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+
+    Ok(entries)
+}
+
+#[tauri::command]
+fn is_directory(path: String) -> bool {
+    PathBuf::from(path).is_dir()
 }
 
 #[tauri::command]
@@ -670,6 +721,8 @@ pub fn run() {
             write_file,
             get_file_name,
             read_directory,
+            read_directory_entries,
+            is_directory,
             read_image_as_data_url,
             read_file_as_data_url,
             get_cli_file_path,

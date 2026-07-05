@@ -2,9 +2,16 @@ import { open } from "@tauri-apps/plugin-dialog"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core"
 import { normalizeFilePath, readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
 
+interface DirectoryEntry {
+  name: string
+  path: string
+  is_directory: boolean
+}
+
 const textFileExtensions = [
   "md",
   "markdown",
+  "pdf",
   "txt",
   "text",
   "json",
@@ -35,51 +42,84 @@ function shouldUseEditorOnlyMode(filePath: string) {
   return extension !== "md" && extension !== "markdown"
 }
 
-function buildTreeFromFlatPaths(filePaths: string[]): FileNode[] {
-  const sortedPaths = [...filePaths].sort()
-  const folderMap = new Map<string, FileNode>()
-  const rootNodes: FileNode[] = []
+function getPathSegments(filePath: string) {
+  return normalizeFilePath(filePath).split(/[\\/]/).filter(Boolean)
+}
 
-  for (const filePath of sortedPaths) {
-    const normalizedFilePath = normalizeFilePath(filePath)
-    const segments = normalizedFilePath.split(/[\\/]/)
-    const fileName = segments.pop()!
-    const dirSegments = segments
+function getBaseName(filePath: string) {
+  const segments = getPathSegments(filePath)
+  return segments[segments.length - 1] || normalizeFilePath(filePath)
+}
 
-    let parentNodes = rootNodes
-    let currentPath = ""
+function isSupportedFile(filePath: string) {
+  return textFileExtensions.includes(getFileExtension(filePath))
+}
 
-    for (const segment of dirSegments) {
-      currentPath = currentPath ? `${currentPath}/${segment}` : segment
+function createNodeFromEntry(entry: DirectoryEntry): FileNode | null {
+  const normalizedPath = normalizeFilePath(entry.path)
 
-      let folder = folderMap.get(currentPath)
-      if (!folder) {
-        folder = {
-          id: `folder-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-          name: segment,
-          type: "folder",
-          filePath: currentPath,
-          children: [],
-          isExpanded: true,
-        }
-        folderMap.set(currentPath, folder)
-        parentNodes.push(folder)
-      }
-      parentNodes = folder.children!
+  if (entry.is_directory) {
+    return {
+      id: `folder-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: entry.name,
+      type: "folder",
+      filePath: normalizedPath,
+      children: [],
+      isExpanded: false,
+      isLoaded: false,
+      isLoading: false,
     }
-
-    const fileNode: FileNode = {
-      id: `open-folder-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      name: fileName,
-      type: "file",
-      content: "",
-      filePath: normalizedFilePath,
-      sourceModified: null,
-    }
-    parentNodes.push(fileNode)
   }
 
-  return rootNodes
+  if (!isSupportedFile(normalizedPath)) {
+    return null
+  }
+
+  return {
+    id: `open-folder-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name: entry.name,
+    type: "file",
+    filePath: normalizedPath,
+    isDirty: false,
+    hasExternalChanges: false,
+  }
+}
+
+function sortNodes(nodes: FileNode[]) {
+  return [...nodes].sort((left, right) => {
+    if (left.type !== right.type) {
+      return left.type === "folder" ? -1 : 1
+    }
+
+    return left.name.localeCompare(right.name, undefined, { sensitivity: "base" })
+  })
+}
+
+export async function loadFolderChildren(folderId: string): Promise<FileNode[]> {
+  const store = useEditorStore.getState()
+  const folder = store.findNodeById(folderId)
+
+  if (!folder || folder.type !== "folder" || !folder.filePath) {
+    return []
+  }
+
+  store.setFolderLoading(folderId, true)
+
+  try {
+    const entries = await invoke<DirectoryEntry[]>("read_directory_entries", {
+      path: normalizeFilePath(folder.filePath),
+    })
+    const children = sortNodes(entries.map(createNodeFromEntry).filter((node): node is FileNode => Boolean(node)))
+
+    const latestStore = useEditorStore.getState()
+    latestStore.replaceFolderChildren(folderId, children)
+    const refreshedFolder = useEditorStore.getState().findNodeById(folderId)
+    return refreshedFolder?.children ?? children
+  } catch (error) {
+    useEditorStore.getState().setFolderLoading(folderId, false)
+    console.error("[RadishMD][openFolder] load children failed", error)
+    return []
+  }
 }
 
 export async function openFolder(): Promise<void> {
@@ -96,70 +136,39 @@ export async function openFolder(): Promise<void> {
   const folderPath = Array.isArray(selected) ? selected[0] : selected
   console.log("[RadishMD][openFolder] selected", { folderPath })
 
+  await openFolderPath(folderPath)
+}
+
+export async function openFolderPath(folderPath: string): Promise<void> {
+  const normalizedFolderPath = normalizeFilePath(folderPath)
   const store = useEditorStore.getState()
 
-  const allFiles: string[] = await invoke("read_directory", { path: folderPath })
-  console.log("[RadishMD][openFolder] files found", { count: allFiles.length })
+  store.addTreeNodes([
+    {
+      id: `folder-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: getBaseName(normalizedFolderPath),
+      type: "folder",
+      filePath: normalizedFolderPath,
+      children: [],
+      isExpanded: true,
+      isLoaded: false,
+      isLoading: false,
+    },
+  ])
 
-  const supportedFiles = allFiles.filter((filePath) => {
-    const ext = getFileExtension(filePath)
-    return textFileExtensions.includes(ext)
-  })
-
-  if (supportedFiles.length === 0) {
-    console.log("[RadishMD][openFolder] no supported files found")
+  const rootFolder = useEditorStore.getState().findFolderByPath(normalizedFolderPath)
+  if (!rootFolder) {
     return
   }
 
-  supportedFiles.sort()
-  const newFilePaths: string[] = []
-  const seenPaths = new Set<string>()
+  const children = await loadFolderChildren(rootFolder.id)
+  const firstFile = children.find((node) => node.type === "file")
 
-  for (const filePath of supportedFiles) {
-    const normalizedPath = normalizeFilePath(filePath)
-    if (seenPaths.has(normalizedPath)) continue
-    seenPaths.add(normalizedPath)
-
-    const existingFile = store.findNodeByPath(normalizedPath)
-    if (!existingFile) {
-      newFilePaths.push(normalizedPath)
-    }
-  }
-
-  if (newFilePaths.length === 0) {
-    console.log("[RadishMD][openFolder] all files already exist in tree")
-    return
-  }
-
-  const treeNodes = buildTreeFromFlatPaths(newFilePaths)
-
-  let firstFileId: string | null = null
-
-  async function readTreeContent(nodes: FileNode[]): Promise<void> {
-    for (const node of nodes) {
-      if (node.type === "file" && node.filePath) {
-        const snapshot = await readFileSnapshot(node.filePath)
-        node.content = snapshot.content
-        node.sourceModified = snapshot.modified
-
-        if (!firstFileId) {
-          firstFileId = node.id
-        }
-      }
-      if (node.children) {
-        await readTreeContent(node.children)
-      }
-    }
-  }
-  await readTreeContent(treeNodes)
-
-  store.addTreeNodes(treeNodes)
-
-  if (firstFileId) {
-    void store.activateFileById(firstFileId)
+  if (firstFile) {
+    void useEditorStore.getState().setActiveFile(firstFile.id)
     store.setShouldResetScroll(true)
 
-    const targetPath = store.findNodeById(firstFileId)?.filePath ?? null
+    const targetPath = firstFile.filePath ?? null
     if (
       targetPath &&
       shouldUseEditorOnlyMode(targetPath) &&
@@ -169,6 +178,18 @@ export async function openFolder(): Promise<void> {
       store.setSplitViewMode("editor")
     }
   }
+}
+
+export async function openExternalPath(path: string): Promise<void> {
+  const normalizedPath = normalizeFilePath(path)
+  const isDirectory = await invoke<boolean>("is_directory", { path: normalizedPath })
+
+  if (isDirectory) {
+    await openFolderPath(normalizedPath)
+    return
+  }
+
+  await useEditorStore.getState().openFileFromPath(normalizedPath)
 }
 
 export async function importFiles(): Promise<void> {
@@ -264,7 +285,7 @@ export async function importFiles(): Promise<void> {
   const activationTargetId = duplicateActivationTargetId ?? newActivationTargetId
   if (activationTargetId) {
     console.log("[RadishMD][import] activation target", { activationTargetId })
-    void store.activateFileById(activationTargetId)
+    void store.setActiveFile(activationTargetId)
     store.setShouldResetScroll(true)
 
     const activationTargetPath =

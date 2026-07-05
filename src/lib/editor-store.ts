@@ -10,6 +10,8 @@ export interface FileNode {
   children?: FileNode[]
   content?: string
   isExpanded?: boolean
+  isLoaded?: boolean
+  isLoading?: boolean
   filePath?: string
   sourceModified?: number | null
   isDirty?: boolean
@@ -103,6 +105,9 @@ interface EditorState {
   addTreeNodes: (newNodes: FileNode[]) => void
   findNodeById: (id: string) => FileNode | null
   findNodeByPath: (filePath: string) => FileNode | null
+  findFolderByPath: (folderPath: string) => FileNode | null
+  setFolderLoading: (id: string, isLoading: boolean) => void
+  replaceFolderChildren: (id: string, children: FileNode[]) => void
   activateFileById: (id: string) => void
   saveFileById: (id: string) => Promise<void>
   reloadFileFromDiskById: (id: string) => Promise<void>
@@ -264,6 +269,62 @@ function findFileByPath(nodes: FileNode[], filePath?: string): FileNode | null {
   return null
 }
 
+function mergeRefreshedChildren(existing: FileNode[] = [], incoming: FileNode[]): FileNode[] {
+  const existingByPath = new Map<string, FileNode>()
+  const preservedUnsaved: FileNode[] = []
+
+  for (const node of existing) {
+    if (node.filePath) {
+      existingByPath.set(node.filePath, node)
+    }
+  }
+
+  const merged = incoming.map((incomingNode) => {
+    const existingNode = incomingNode.filePath ? existingByPath.get(incomingNode.filePath) : null
+
+    if (!existingNode) {
+      return incomingNode
+    }
+
+    if (incomingNode.type === "folder" && existingNode.type === "folder") {
+      return {
+        ...incomingNode,
+        children: existingNode.children ?? incomingNode.children,
+        isExpanded: existingNode.isExpanded ?? incomingNode.isExpanded,
+        isLoaded: existingNode.isLoaded ?? incomingNode.isLoaded,
+        isLoading: false,
+      }
+    }
+
+    if (incomingNode.type === "file" && existingNode.type === "file") {
+      const shouldPreserveLoadedContent =
+        existingNode.isDirty ||
+        existingNode.isNew ||
+        (existingNode.content !== undefined && existingNode.sourceModified != null)
+
+      return {
+        ...incomingNode,
+        content: shouldPreserveLoadedContent ? existingNode.content : incomingNode.content,
+        sourceModified: shouldPreserveLoadedContent ? existingNode.sourceModified : incomingNode.sourceModified,
+        isDirty: existingNode.isDirty ?? incomingNode.isDirty,
+        hasExternalChanges: existingNode.hasExternalChanges ?? incomingNode.hasExternalChanges,
+        isNew: existingNode.isNew ?? incomingNode.isNew,
+      }
+    }
+
+    return incomingNode
+  })
+
+  const incomingPaths = new Set(incoming.map((node) => node.filePath).filter(Boolean))
+  for (const node of existing) {
+    if (node.filePath && !incomingPaths.has(node.filePath) && (node.isDirty || node.isNew)) {
+      preservedUnsaved.push(node)
+    }
+  }
+
+  return [...merged, ...preservedUnsaved]
+}
+
 export const useEditorStore = create<EditorState>((set, get) => ({
   files: initialFiles,
   activeFileId: null,
@@ -328,7 +389,10 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             return
           }
 
-          const modifiedChanged = snapshot.modified !== file.sourceModified
+          const shouldLoadContent =
+            file.content === undefined ||
+            (file.content === "" && file.sourceModified == null && !file.isDirty && !file.isNew)
+          const modifiedChanged = shouldLoadContent || snapshot.modified !== file.sourceModified
 
           if (modifiedChanged) {
             if (file.isDirty) {
@@ -508,32 +572,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     return findInNodes(get().files)
   },
 
+  findFolderByPath: (folderPath: string) => {
+    return findFolderByPath(get().files, normalizeFilePath(folderPath))
+  },
+
+  setFolderLoading: (id: string, isLoading: boolean) => {
+    set((state) => ({
+      files: updateFileInNodes(state.files, id, (node) => {
+        if (node.type !== "folder") {
+          return node
+        }
+
+        return { ...node, isLoading }
+      }),
+    }))
+  },
+
+  replaceFolderChildren: (id: string, children: FileNode[]) => {
+    set((state) => ({
+      files: updateFileInNodes(state.files, id, (node) => {
+        if (node.type !== "folder") {
+          return node
+        }
+
+        return {
+          ...node,
+          children: mergeRefreshedChildren(node.children, children),
+          isLoaded: true,
+          isLoading: false,
+        }
+      }),
+    }))
+  },
+
   activateFileById: (id: string) => {
-    const file = get().findNodeById(id)
-    if (!file || file.type !== "file") {
-      return
-    }
-
-    const isPdf = file.filePath?.toLowerCase().endsWith(".pdf") ?? false
-    // For PDFs, generate asset URL; otherwise use stored content
-    const currentContent = isPdf && file.filePath ? convertFileSrc(file.filePath) : (file.content || "")
-
-    debugEditorLog("activateFileById", {
-      id,
-      fileName: file.name,
-      filePath: file.filePath,
-      contentLength: currentContent.length,
-      isPdf,
-    })
-
-    set({
-      activeFileId: id,
-      content: currentContent,
-      contentType: isPdf ? "pdf" : "markdown",
-      splitViewMode: isPdf ? "render" : get().splitViewMode,
-      ...(isPdf && { isSidebarOpen: false, isOutlineOpen: false }),
-    })
-    get().updateCounts(currentContent)
+    void get().setActiveFile(id)
   },
 
   reloadFileFromDiskById: async (id: string) => {

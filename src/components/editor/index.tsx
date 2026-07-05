@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils"
 import { UpdateDialog } from "./update-dialog"
 import { CloseConfirmDialog } from "./close-confirm-dialog"
 import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
+import { openExternalPath } from "@/lib/file-operations"
 import {
   checkLatestRelease,
   cancelDownload,
@@ -30,7 +31,6 @@ export function Editor() {
     toggleSidebar,
     toggleOutline,
     saveFile,
-    openFileFromPath,
     checkActiveFileForExternalChanges,
     isSearchOpen,
     toggleSearch,
@@ -99,7 +99,7 @@ export function Editor() {
 
     handledOpenedFilePathsRef.current.add(normalizedFilePath)
     console.log("[RadishMD][Editor] openFilePathOnce dispatch", { normalizedFilePath })
-    void openFileFromPath(normalizedFilePath)
+    void openExternalPath(normalizedFilePath)
   }
 
   useEffect(() => {
@@ -307,7 +307,7 @@ export function Editor() {
         openFilePathOnce(filePath)
       }
     })
-  }, [openFileFromPath])
+  }, [])
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -342,7 +342,7 @@ export function Editor() {
       cancelled = true
       unlisten?.()
     }
-  }, [openFileFromPath])
+  }, [])
 
   useEffect(() => {
     if (import.meta.env.DEV || hasAutoCheckedUpdate.current) {

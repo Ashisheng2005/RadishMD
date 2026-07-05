@@ -1,83 +1,175 @@
 import { useMemo } from "react"
 import { cn } from "@/lib/utils"
 import { useEditorStore } from "@/lib/editor-store"
+import { parseMarkdownHeadings, type MarkdownHeading } from "@/lib/heading-utils"
 
-interface HeadingItem {
-  level: number
-  text: string
-  lineIndex: number
+function findScrollContainer(element: HTMLElement): HTMLElement | null {
+  let current: HTMLElement | null = element.parentElement
+
+  while (current) {
+    const style = window.getComputedStyle(current)
+    const overflowY = style.overflowY
+
+    if ((overflowY === "auto" || overflowY === "scroll") && current.scrollHeight > current.clientHeight) {
+      return current
+    }
+
+    current = current.parentElement
+  }
+
+  return null
+}
+
+function scrollElementToContainerCenter(element: HTMLElement) {
+  const scrollContainer = findScrollContainer(element)
+
+  if (!scrollContainer) {
+    element.scrollIntoView({ behavior: "smooth", block: "center" })
+    return
+  }
+
+  const containerRect = scrollContainer.getBoundingClientRect()
+  const elementRect = element.getBoundingClientRect()
+  const targetScrollTop =
+    scrollContainer.scrollTop +
+    elementRect.top -
+    containerRect.top -
+    scrollContainer.clientHeight / 2 +
+    elementRect.height / 2
+
+  scrollContainer.scrollTo({
+    top: Math.max(0, targetScrollTop),
+    behavior: "smooth",
+  })
+}
+
+function scrollRenderedHeadingIntoView(lineIndex: number, attempt = 0) {
+  const headingBlocks = Array.from(
+    document.querySelectorAll(`[data-source-line="${lineIndex}"]`)
+  ) as HTMLElement[]
+  const targetBlock = headingBlocks[0]
+
+  if (!targetBlock) {
+    if (attempt < 20) {
+      window.setTimeout(() => scrollRenderedHeadingIntoView(lineIndex, attempt + 1), 50)
+    }
+    return
+  }
+
+  scrollElementToContainerCenter(targetBlock)
+
+  const editable = targetBlock.querySelector('[contenteditable]') as HTMLElement | null
+  editable?.focus()
+}
+
+function getTextareaLineStart(value: string, lineIndex: number) {
+  let lineStart = 0
+
+  for (let index = 0; index < lineIndex; index += 1) {
+    const nextLineBreak = value.indexOf("\n", lineStart)
+
+    if (nextLineBreak === -1) {
+      return value.length
+    }
+
+    lineStart = nextLineBreak + 1
+  }
+
+  return lineStart
+}
+
+function measureTextareaOffsetTop(textarea: HTMLTextAreaElement, position: number) {
+  const computedStyle = window.getComputedStyle(textarea)
+  const mirror = document.createElement("div")
+  const marker = document.createElement("span")
+  const copiedProperties = [
+    "boxSizing",
+    "width",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "lineHeight",
+    "textTransform",
+    "wordSpacing",
+    "tabSize",
+  ] as const
+
+  copiedProperties.forEach((property) => {
+    mirror.style[property] = computedStyle[property]
+  })
+
+  mirror.style.position = "absolute"
+  mirror.style.visibility = "hidden"
+  mirror.style.pointerEvents = "none"
+  mirror.style.whiteSpace = "pre-wrap"
+  mirror.style.overflowWrap = "break-word"
+  mirror.style.overflow = "hidden"
+  mirror.style.left = "-9999px"
+  mirror.style.top = "0"
+  mirror.style.height = "auto"
+  mirror.style.minHeight = "0"
+  mirror.style.maxHeight = "none"
+  mirror.style.width = `${textarea.clientWidth}px`
+  mirror.textContent = textarea.value.slice(0, position)
+  marker.textContent = "\u200b"
+  mirror.appendChild(marker)
+  document.body.appendChild(mirror)
+
+  const offsetTop = marker.offsetTop
+  mirror.remove()
+
+  return offsetTop
+}
+
+function scrollTextareaLineIntoView(textarea: HTMLTextAreaElement, content: string, lineIndex: number) {
+  const lineStart = getTextareaLineStart(textarea.value || content, lineIndex)
+  const targetTop = measureTextareaOffsetTop(textarea, lineStart)
+  const computedStyle = window.getComputedStyle(textarea)
+  const lineHeight = Number.parseFloat(computedStyle.lineHeight) || Number.parseFloat(computedStyle.fontSize) * 1.5 || 24
+
+  textarea.focus()
+  textarea.setSelectionRange(lineStart, lineStart)
+  textarea.scrollTo({
+    top: Math.max(0, targetTop - textarea.clientHeight / 2 + lineHeight / 2),
+    behavior: "smooth",
+  })
 }
 
 export function Outline() {
   const { content, isOutlineOpen, editMode, splitViewMode } = useEditorStore()
 
   const headings = useMemo(() => {
-    const lines = content.split("\n")
-    const items: HeadingItem[] = []
-    let inCodeBlock = false
-
-    lines.forEach((line, index) => {
-      if (line.startsWith("```")) {
-        inCodeBlock = !inCodeBlock
-        return
-      }
-
-      if (inCodeBlock) return
-
-      const match = line.match(/^(#{1,6})\s+(.+)$/)
-      if (match) {
-        items.push({
-          level: match[1].length,
-          text: match[2],
-          lineIndex: index,
-        })
-      }
-    })
-
-    return items
+    return parseMarkdownHeadings(content)
   }, [content])
 
-  const handleHeadingClick = (heading: HeadingItem) => {
+  const handleHeadingClick = (heading: MarkdownHeading) => {
     if (editMode === "split" && splitViewMode !== "render") {
       const textarea = document.querySelector(
         "[data-editor-textarea]"
       ) as HTMLTextAreaElement | null
       if (!textarea) return
 
-      const lines = content.split("\n")
-      const lineStart = lines
-        .slice(0, heading.lineIndex)
-        .reduce((total, line) => total + line.length + 1, 0)
-      const computedStyle = window.getComputedStyle(textarea)
-      const lineHeight = Number.parseFloat(computedStyle.lineHeight) || Number.parseFloat(computedStyle.fontSize) * 1.5 || 24
-
-      textarea.focus()
-      textarea.setSelectionRange(lineStart, lineStart)
-
       requestAnimationFrame(() => {
-        const targetScrollTop = Math.max(
-          0,
-          heading.lineIndex * lineHeight - textarea.clientHeight / 2 + lineHeight / 2
-        )
-        textarea.scrollTo({
-          top: targetScrollTop,
-          behavior: "smooth",
-        })
+        scrollTextareaLineIntoView(textarea, content, heading.lineIndex)
+
+        if (splitViewMode === "split") {
+          scrollRenderedHeadingIntoView(heading.lineIndex)
+        }
       })
       return
     }
 
-    const headingBlocks = Array.from(
-      document.querySelectorAll(`[data-source-line="${heading.lineIndex}"]`)
-    ) as HTMLElement[]
-    const targetBlock = headingBlocks[0]
-
-    if (!targetBlock) return
-
-    targetBlock.scrollIntoView({ behavior: "smooth", block: "center" })
-
-    const editable = targetBlock.querySelector('[contenteditable]') as HTMLElement | null
-    editable?.focus()
+    scrollRenderedHeadingIntoView(heading.lineIndex)
   }
 
   if (!isOutlineOpen) return null

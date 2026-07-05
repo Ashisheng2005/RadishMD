@@ -2,6 +2,8 @@ import type { Block, BlockType } from "./types"
 import katex from "katex"
 import "katex/dist/katex.min.css"
 import { resolveImageSource } from "@/lib/image-utils"
+import { parseMarkdownHeadingLine } from "@/lib/heading-utils"
+import { renderMarkdownEmphasis, splitMarkdownTableRow } from "@/lib/markdown-inline-utils"
 
 export function escapeHtml(value: string) {
   return value
@@ -39,11 +41,7 @@ function isTableSeparatorLine(line: string) {
     return false
   }
 
-  const cells = trimmed
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim())
+  const cells = splitMarkdownTableRow(trimmed)
 
   return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
 }
@@ -59,20 +57,12 @@ export function parseTableMarkdownToHtml(content: string, baseFilePath?: string 
     return `<div class="rounded-lg border border-border bg-muted/20 p-3 font-mono text-sm whitespace-pre-wrap">${escapeHtml(content)}</div>`
   }
 
-  const headerCells = lines[0]
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
+  const headerCells = splitMarkdownTableRow(lines[0])
     .map((cell) => `<th class="border border-border px-3 py-2 text-left font-medium bg-muted">${renderInlineMarkdown(cell.trim(), baseFilePath)}</th>`)
     .join("")
 
   const bodyRows = lines.slice(2).map((row) => {
-    const cells = row
-      .trim()
-      .replace(/^\|/, "")
-      .replace(/\|$/, "")
-      .split("|")
+    const cells = splitMarkdownTableRow(row)
       .map((cell) => `<td class="border border-border px-3 py-2 align-top">${renderInlineMarkdown(cell.trim(), baseFilePath)}</td>`)
       .join("")
 
@@ -150,39 +140,9 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
     }
 
     // Headings
-    const h6Match = line.match(/^######\s+(.*)$/)
-    if (h6Match) {
-      blocks.push({ id, sourceLine: i, type: "heading6", content: h6Match[1] })
-      i++
-      continue
-    }
-    const h5Match = line.match(/^#####\s+(.*)$/)
-    if (h5Match) {
-      blocks.push({ id, sourceLine: i, type: "heading5", content: h5Match[1] })
-      i++
-      continue
-    }
-    const h4Match = line.match(/^####\s+(.*)$/)
-    if (h4Match) {
-      blocks.push({ id, sourceLine: i, type: "heading4", content: h4Match[1] })
-      i++
-      continue
-    }
-    const h3Match = line.match(/^###\s+(.*)$/)
-    if (h3Match) {
-      blocks.push({ id, sourceLine: i, type: "heading3", content: h3Match[1] })
-      i++
-      continue
-    }
-    const h2Match = line.match(/^##\s+(.*)$/)
-    if (h2Match) {
-      blocks.push({ id, sourceLine: i, type: "heading2", content: h2Match[1] })
-      i++
-      continue
-    }
-    const h1Match = line.match(/^#\s+(.*)$/)
-    if (h1Match) {
-      blocks.push({ id, sourceLine: i, type: "heading1", content: h1Match[1] })
+    const headingMatch = parseMarkdownHeadingLine(line)
+    if (headingMatch) {
+      blocks.push({ id, sourceLine: i, type: `heading${headingMatch.level}`, content: headingMatch.text })
       i++
       continue
     }
@@ -303,7 +263,7 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       if (nextLine.trim() === "") break
       if (nextLine.startsWith("```")) break
       if (nextLine.match(/^---+$/)) break
-      if (nextLine.match(/^#{1,6}\s/)) break
+      if (parseMarkdownHeadingLine(nextLine)) break
       if (nextLine.match(/^-\s/)) break
       if (nextLine.match(/^\d+\.\s/)) break
       if (nextLine.match(/^>\s/)) break
@@ -361,6 +321,7 @@ export function blocksToMarkdown(blocks: Block[]): string {
 export function renderInlineMarkdown(text: string, baseFilePath?: string | null): string {
   // Normalize line endings first to prevent extra spacing with CRLF files
   let result = text.replace(/\r\n?/g, "\n")
+  const codePlaceholders: string[] = []
 
   // Block math formula $$MATH$$: - must be handled before inline math
   if (result.startsWith("$$MATH$$:")) {
@@ -399,25 +360,17 @@ export function renderInlineMarkdown(text: string, baseFilePath?: string | null)
   }
 
   // Convert newlines to <br> for multi-line support
+  result = result.replace(/`([^`]+)`/g, (_match, code) => {
+    const key = `\x00CODE:${codePlaceholders.length}\x00`
+    codePlaceholders.push(`<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">${escapeHtml(code)}</code>`)
+    return key
+  })
   result = result.replace(/\n/g, "<br>")
 
-  // Bold + Italic
-  result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-
-  // Bold
-  result = result.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-
-  // Italic
-  result = result.replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
-
-  // Strikethrough
-  result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
+  result = renderMarkdownEmphasis(result)
 
   // Inline math $...$
   result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => renderMathInline(formula))
-
-  // Inline code
-  result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
 
   // Images (markdown style) - resolve local image paths to asset URLs
   result = result.replace(
@@ -433,6 +386,7 @@ export function renderInlineMarkdown(text: string, baseFilePath?: string | null)
     /\[([^\]]+)\]\(([^)]+)\)/g,
     '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>'
   )
+  result = result.replace(/\x00CODE:(\d+)\x00/g, (_match, index) => codePlaceholders[Number(index)] ?? "")
 
   return result
 }

@@ -1,5 +1,7 @@
 import { buildImageTag, parseImageReference } from "@/lib/image-utils"
 import { renderCodeBlockHtml } from "@/lib/code-highlighting"
+import { parseMarkdownHeadingLine } from "@/lib/heading-utils"
+import { renderMarkdownEmphasis, splitMarkdownTableRow } from "@/lib/markdown-inline-utils"
 
 export interface MarkdownRenderChunk {
   key: string
@@ -48,11 +50,7 @@ function isTableSeparatorLine(line: string) {
     return false
   }
 
-  const cells = trimmed
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim())
+  const cells = splitMarkdownTableRow(trimmed)
 
   return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell))
 }
@@ -68,20 +66,12 @@ function parseTableMarkdownToHtml(content: string, baseFilePath?: string | null)
     return `<div class="rounded-lg border border-border bg-muted/20 p-3 font-mono text-sm whitespace-pre-wrap">${escapeHtml(content)}</div>`
   }
 
-  const headerCells = lines[0]
-    .trim()
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
+  const headerCells = splitMarkdownTableRow(lines[0])
     .map((cell) => `<th class="border border-border px-3 py-2 text-left font-medium bg-muted">${renderInlineMarkdown(cell.trim(), baseFilePath)}</th>`)
     .join("")
 
   const bodyRows = lines.slice(2).map((row) => {
-    const cells = row
-      .trim()
-      .replace(/^\|/, "")
-      .replace(/\|$/, "")
-      .split("|")
+    const cells = splitMarkdownTableRow(row)
       .map((cell) => `<td class="border border-border px-3 py-2 align-top">${renderInlineMarkdown(cell.trim(), baseFilePath)}</td>`)
       .join("")
 
@@ -152,10 +142,9 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       continue
     }
 
-    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/)
+    const headingMatch = parseMarkdownHeadingLine(line)
     if (headingMatch) {
-      const level = headingMatch[1].length as 1 | 2 | 3 | 4 | 5 | 6
-      blocks.push({ type: `heading${level}` as MarkdownBlock["type"], content: headingMatch[2], sourceLine: index })
+      blocks.push({ type: `heading${headingMatch.level}` as MarkdownBlock["type"], content: headingMatch.text, sourceLine: index })
       index += 1
       continue
     }
@@ -263,7 +252,7 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       if (nextLine.trim() === "") break
       if (nextLine.startsWith("```")) break
       if (nextLine.match(/^---+$/)) break
-      if (nextLine.match(/^#{1,6}\s/)) break
+      if (parseMarkdownHeadingLine(nextLine)) break
       if (nextLine.match(/^-\s/)) break
       if (nextLine.match(/^>\s/)) break
       if (isTableRowLine(nextLine)) break
@@ -283,6 +272,7 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
 
 function renderInlineMarkdown(text: string, baseFilePath?: string | null): string {
   let result = text
+  const codePlaceholders: string[] = []
 
   const trimmedText = text.trim()
   const parsedImageReference = parseImageReference(trimmedText, true)
@@ -293,6 +283,11 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   // For URLs with &, we need to escape them as &amp; but not double-escape
   // Strategy: replace & with a temp marker before HTML escaping, restore after
   const AMP_PLACEHOLDER = "\x00AMP\x00"
+  result = result.replace(/`([^`]+)`/g, (_match, code) => {
+    const key = `\x00CODE:${codePlaceholders.length}\x00`
+    codePlaceholders.push(`<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">${escapeHtml(code)}</code>`)
+    return key
+  })
   result = result.replace(/&(?!amp;)/g, AMP_PLACEHOLDER)
 
   // Now HTML escape
@@ -313,14 +308,11 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   )
 
   // Process other markdown
-  result = result.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-  result = result.replace(/\*\*(.+?)\*\*/g, '<strong class="font-semibold">$1</strong>')
-  result = result.replace(/\*(.+?)\*/g, '<em class="italic">$1</em>')
-  result = result.replace(/~~(.+?)~~/g, '<del class="line-through opacity-60">$1</del>')
+  result = renderMarkdownEmphasis(result)
   // Inline math $...$
   result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => MATH_INLINE_PLACEHOLDER(formula))
-  result = result.replace(/`([^`]+)`/g, '<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">$1</code>')
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>')
+  result = result.replace(/\x00CODE:(\d+)\x00/g, (_match, index) => codePlaceholders[Number(index)] ?? "")
 
   return result
 }

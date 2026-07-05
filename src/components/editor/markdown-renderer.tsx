@@ -9,6 +9,10 @@ import katex from "katex"
 import "katex/dist/katex.min.css"
 import mermaid from "mermaid"
 
+const CHUNK_RENDER_BATCH_SIZE = 40
+const CHUNK_RENDER_FRAME_DELAY = 16
+const MERMAID_ROOT_MARGIN = "600px 0px"
+
 function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
@@ -119,39 +123,49 @@ function ensureMermaidInitialized() {
   mermaidInitialized = true
 }
 
-// Renders mermaid placeholders in DOM after HTML is set
-async function renderMermaidInContainer(container: HTMLElement) {
-  const mermaidDivs = container.querySelectorAll(".mermaid-diagram")
-  if (mermaidDivs.length === 0) return
-
+async function renderMermaidElement(div: Element) {
   ensureMermaidInitialized()
 
-  const renders: Promise<void>[] = []
-  mermaidDivs.forEach((div) => {
-    const id = div.getAttribute("data-mermaid-id")
-    const content = div.getAttribute("data-mermaid-content")
-    if (!id || !content) return
+  if (div.getAttribute("data-mermaid-rendered") === "true" || div.getAttribute("data-mermaid-rendering") === "true") {
+    return
+  }
 
-    const encodedContent = decodeURIComponent(content)
-    renders.push(
-      mermaid
-        .render(id, encodedContent)
-        .then(({ svg }) => {
-          div.innerHTML = svg
-        })
-        .catch((err) => {
-          console.error("[RadishMD] mermaid render error", err)
-          const errorMsg = err instanceof Error ? err.message : String(err)
-          div.innerHTML = `<div class="mermaid-error p-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20 my-2">
+  const id = div.getAttribute("data-mermaid-id")
+  const content = div.getAttribute("data-mermaid-content")
+  if (!id || !content) return
+
+  div.setAttribute("data-mermaid-rendering", "true")
+  const encodedContent = decodeURIComponent(content)
+
+  try {
+    const { svg } = await mermaid.render(id, encodedContent)
+    if (!div.isConnected) return
+
+    div.innerHTML = svg
+    div.setAttribute("data-mermaid-rendered", "true")
+  } catch (err) {
+    console.error("[RadishMD] mermaid render error", err)
+    if (!div.isConnected) return
+
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    div.innerHTML = `<div class="mermaid-error p-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20 my-2">
   <p class="text-sm font-medium text-red-600 dark:text-red-400 mb-1">⚠️ 流程图渲染失败</p>
   <p class="text-xs text-red-500/80 mb-2 font-mono">${escapeHtml(errorMsg)}</p>
   <pre class="text-xs text-red-500 whitespace-pre-wrap border-t border-red-200 dark:border-red-800 pt-2 mt-1">${escapeHtml(encodedContent)}</pre>
 </div>`
-        })
-    )
-  })
+    div.setAttribute("data-mermaid-rendered", "true")
+  } finally {
+    div.removeAttribute("data-mermaid-rendering")
+  }
+}
 
-  await Promise.all(renders)
+function processDisplayChunks(chunks: MarkdownRenderChunk[], baseFilePath: string | null): MarkdownRenderChunk[] {
+  const processedChunks = chunks.map((chunk) => ({
+    ...chunk,
+    html: renderMathInHtml(chunk.html),
+  }))
+
+  return resolveImagePathsInHtml(processedChunks, baseFilePath)
 }
 
 interface MarkdownRendererProps {
@@ -169,6 +183,8 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   const workerRef = useRef<Worker | null>(null)
   const renderRequestIdRef = useRef(0)
   const renderDebounceTimerRef = useRef<number | null>(null)
+  const chunkRenderTimerRef = useRef<number | null>(null)
+  const chunkRenderTokenRef = useRef(0)
   const latestRenderInputRef = useRef<{ content: string; activeFilePath: string | null }>({
     content: "",
     activeFilePath: null,
@@ -183,30 +199,100 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     return state.findNodeById(state.activeFileId)?.filePath ?? null
   })
 
-  // Render mermaid diagrams after chunks are set in DOM
+  const cancelScheduledChunkRender = useCallback(() => {
+    chunkRenderTokenRef.current += 1
+
+    if (chunkRenderTimerRef.current !== null) {
+      window.clearTimeout(chunkRenderTimerRef.current)
+      chunkRenderTimerRef.current = null
+    }
+  }, [])
+
+  // Mermaid diagrams are rendered only when they approach the preview viewport.
   useEffect(() => {
     if (!contentRef.current) return
     const container = contentRef.current
-    // Use requestAnimationFrame to ensure DOM is updated
-    requestAnimationFrame(() => {
-      renderMermaidInContainer(container)
+
+    const mermaidDivs = Array.from(container.querySelectorAll(".mermaid-diagram")).filter((div) => {
+      return div.getAttribute("data-mermaid-rendered") !== "true"
     })
+
+    if (mermaidDivs.length === 0) return
+
+    const previewScroller = container.parentElement
+
+    if (typeof IntersectionObserver === "undefined") {
+      mermaidDivs.forEach((div) => {
+        void renderMermaidElement(div)
+      })
+      return
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return
+
+          observer.unobserve(entry.target)
+          void renderMermaidElement(entry.target)
+        })
+      },
+      {
+        root: previewScroller,
+        rootMargin: MERMAID_ROOT_MARGIN,
+      },
+    )
+
+    mermaidDivs.forEach((div) => observer.observe(div))
+
+    return () => observer.disconnect()
   }, [renderedChunks])
 
   const enqueueChunkRender = useCallback(
     (_requestId: number, chunks: MarkdownRenderChunk[]) => {
       const baseFilePath = latestRenderInputRef.current.activeFilePath
-      startTransition(() => {
-        // Process math formulas and resolve image paths in main thread
-        const processedChunks = chunks.map((chunk) => ({
-          ...chunk,
-          html: renderMathInHtml(chunk.html),
-        }))
-        // Resolve image paths after math formulas are processed
-        const resolvedChunks = resolveImagePathsInHtml(processedChunks, baseFilePath)
-        setRenderedChunks(resolvedChunks)
-      })
-      setIsRendering(false)
+      const token = chunkRenderTokenRef.current + 1
+      chunkRenderTokenRef.current = token
+
+      if (chunkRenderTimerRef.current !== null) {
+        window.clearTimeout(chunkRenderTimerRef.current)
+        chunkRenderTimerRef.current = null
+      }
+
+      setRenderedChunks([])
+
+      if (chunks.length === 0) {
+        setIsRendering(false)
+        return
+      }
+
+      let nextIndex = 0
+
+      const renderNextBatch = () => {
+        if (token !== chunkRenderTokenRef.current || _requestId !== renderRequestIdRef.current) {
+          return
+        }
+
+        const batch = chunks.slice(nextIndex, nextIndex + CHUNK_RENDER_BATCH_SIZE)
+        nextIndex += batch.length
+        const displayBatch = processDisplayChunks(batch, baseFilePath)
+
+        startTransition(() => {
+          setRenderedChunks((previousChunks) => (
+            nextIndex === batch.length ? displayBatch : [...previousChunks, ...displayBatch]
+          ))
+        })
+
+        if (nextIndex < chunks.length) {
+          chunkRenderTimerRef.current = window.setTimeout(renderNextBatch, CHUNK_RENDER_FRAME_DELAY)
+          return
+        }
+
+        chunkRenderTimerRef.current = null
+        setIsRendering(false)
+      }
+
+      renderNextBatch()
     },
     [startTransition]
   )
@@ -221,6 +307,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
       const nextRequestId = renderRequestIdRef.current + 1
       renderRequestIdRef.current = nextRequestId
+      cancelScheduledChunkRender()
       setIsRendering(true)
 
       worker.postMessage({
@@ -232,7 +319,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
       return true
     },
-    []
+    [cancelScheduledChunkRender]
   )
 
   const scheduleRender = useCallback(
@@ -246,7 +333,7 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
 
         if (!postRenderRequest(renderContent, renderActiveFilePath)) {
           const chunks = renderMarkdownToHtmlChunks(renderContent, renderActiveFilePath)
-          const resolvedChunks = resolveImagePathsInHtml(chunks, renderActiveFilePath)
+          const resolvedChunks = processDisplayChunks(chunks, renderActiveFilePath)
           setRenderedChunks(resolvedChunks)
           setIsRendering(false)
         }
@@ -274,17 +361,17 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
       }
       if (!postRenderRequest(content, activeFilePath)) {
         const chunks = renderMarkdownToHtmlChunks(content, activeFilePath)
-        const resolvedChunks = resolveImagePathsInHtml(chunks, activeFilePath)
+        const resolvedChunks = processDisplayChunks(chunks, activeFilePath)
         setRenderedChunks(resolvedChunks)
         setIsRendering(false)
       }
     }
-  }, [content, activeFilePath])
+  }, [activeFilePath, content, postRenderRequest])
 
   useEffect(() => {
     if (typeof Worker === "undefined") {
       const chunks = renderMarkdownToHtmlChunks(deferredContent, activeFilePath)
-      const resolvedChunks = resolveImagePathsInHtml(chunks, activeFilePath)
+      const resolvedChunks = processDisplayChunks(chunks, activeFilePath)
       setRenderedChunks(resolvedChunks)
       setIsRendering(false)
       return
@@ -322,12 +409,13 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         window.clearTimeout(renderDebounceTimerRef.current)
         renderDebounceTimerRef.current = null
       }
+      cancelScheduledChunkRender()
       workerRef.current = null
       setIsWorkerReady(false)
       setIsRendering(false)
       worker.terminate()
     }
-  }, [enqueueChunkRender])
+  }, [cancelScheduledChunkRender, enqueueChunkRender])
 
   useEffect(() => {
     if (typeof Worker === "undefined") {

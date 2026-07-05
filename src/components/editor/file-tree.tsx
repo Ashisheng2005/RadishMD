@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react"
-import { ChevronRight, File, Folder, FolderOpen } from "lucide-react"
+import { ChevronRight, File, Folder, FolderOpen, Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { FileNode, useEditorStore } from "@/lib/editor-store"
 import { Input } from "@/components/ui/input"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { FileTreeContextMenu } from "./file-tree-context-menu"
+import { loadFolderChildren } from "@/lib/file-operations"
 
 function InlineCreateInput({
   type,
@@ -211,6 +212,15 @@ function FileTreeItem({
     setIsDragOver(false)
   }
 
+  const handleFolderClick = () => {
+    const shouldLoad = !node.isExpanded
+    toggleFolder(node.id)
+
+    if (shouldLoad) {
+      void loadFolderChildren(node.id)
+    }
+  }
+
   // If this node is being renamed, show inline input
   if (isRenaming) {
     return (
@@ -236,7 +246,7 @@ function FileTreeItem({
       >
         <FileTreeContextMenu node={node}>
           <button
-            onClick={() => toggleFolder(node.id)}
+            onClick={handleFolderClick}
             className={cn(
               "w-full flex items-center gap-1.5 px-2 py-1 text-sm rounded-sm",
               "hover:bg-sidebar-accent transition-colors text-sidebar-foreground",
@@ -256,6 +266,9 @@ function FileTreeItem({
               <Folder className="h-4 w-4 shrink-0 text-primary" />
             )}
             <span className="truncate">{node.name}</span>
+            {node.isLoading ? (
+              <Loader2 className="ml-auto h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+            ) : null}
           </button>
         </FileTreeContextMenu>
         {node.isExpanded && (
