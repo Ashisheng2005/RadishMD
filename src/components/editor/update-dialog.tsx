@@ -69,10 +69,10 @@ export function UpdateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl gap-5">
+      <DialogContent className="max-w-2xl gap-4">
         <DialogHeader>
           <div className="flex items-start justify-between gap-3">
-            <div className="space-y-2 text-left">
+            <div className="min-w-0 space-y-1 text-left">
               <DialogTitle>发现新版本</DialogTitle>
               <DialogDescription>
                 当前版本 {currentVersion}，最新版本 {latestVersion}
@@ -82,22 +82,22 @@ export function UpdateDialog({
           </div>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-3">
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <div className="text-xs text-muted-foreground">当前版本</div>
-            <div className="mt-1 font-medium">{currentVersion}</div>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border bg-muted/20 px-3 py-2 text-sm">
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground">当前</span>
+            <span className="font-medium">{currentVersion}</span>
           </div>
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <div className="text-xs text-muted-foreground">最新版本</div>
-            <div className="mt-1 font-medium">{latestVersion}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground">最新</span>
+            <span className="font-medium text-primary">{latestVersion}</span>
           </div>
-          <div className="rounded-lg border bg-muted/30 p-3">
-            <div className="text-xs text-muted-foreground">发布时间</div>
-            <div className="mt-1 font-medium">{updateInfo?.published_at ?? "未知"}</div>
+          <div className="min-w-0 flex items-center gap-1.5">
+            <span className="text-muted-foreground">发布</span>
+            <span className="truncate font-medium">{updateInfo?.published_at ?? "未知"}</span>
           </div>
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid gap-2">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-medium">Release Note</div>
             <Button
@@ -130,14 +130,14 @@ export function UpdateDialog({
               </span>
             </Button>
           </div>
-          <ScrollArea className="h-56 rounded-lg border bg-muted/20">
-            <div className="whitespace-pre-wrap p-4 text-sm leading-6 text-muted-foreground">
+          <ScrollArea className="h-32 rounded-md border bg-muted/20">
+            <div className="whitespace-pre-wrap px-3 py-2.5 text-sm leading-5 text-muted-foreground">
               {releaseNotes}
             </div>
           </ScrollArea>
         </div>
 
-        <div className="grid gap-3">
+        <div className="grid gap-2">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-medium">可下载资产</div>
             <Button type="button" variant="ghost" size="sm" onClick={() => void openExternalTarget(updateInfo?.release_url ?? "")} disabled={!updateInfo?.release_url}>
@@ -172,8 +172,8 @@ export function UpdateDialog({
             </div>
           )}
           {hasAssets ? (
-            <ScrollArea className="max-h-64 rounded-lg border bg-muted/20">
-              <div className="grid gap-2 p-2">
+            <ScrollArea className="max-h-44 rounded-md border bg-muted/20">
+              <div className="divide-y">
                 {updateInfo?.assets.map((asset) => {
                   const isDownloading = downloadingAsset === asset.name
                   const isDownloaded = Boolean(downloadedAssets[asset.name])
@@ -185,42 +185,41 @@ export function UpdateDialog({
                     <div
                       key={asset.name}
                       className={cn(
-                        "rounded-lg border bg-background p-3",
-                        asset.is_preferred && "border-primary/40 bg-primary/5",
-                        isDownloading && "border-primary/50 bg-primary/5",
-                        isDownloaded && "border-green-500/30 bg-green-500/5",
+                        "bg-background px-3 py-2.5",
+                        asset.is_preferred && "bg-primary/5",
+                        isDownloading && "bg-primary/5",
+                        isDownloaded && "bg-green-500/5",
                       )}
                     >
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="min-w-0 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <div className="truncate font-medium">{asset.name}</div>
-                            {asset.is_preferred && <Badge>推荐</Badge>}
-                            {isDownloading && <Badge variant="secondary">下载中</Badge>}
-                            {isDownloaded && <Badge variant="default" className="bg-green-500/80 text-white">已下载</Badge>}
+                      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <div className="truncate text-sm font-medium">{asset.name}</div>
+                            {asset.is_preferred && <Badge className="h-5 shrink-0 px-1.5 text-[11px]">推荐</Badge>}
+                            {isDownloading && <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[11px]">下载中</Badge>}
+                            {isDownloaded && <Badge variant="default" className="h-5 shrink-0 bg-green-500/80 px-1.5 text-[11px] text-white">已下载</Badge>}
                           </div>
-                          <div className="text-xs text-muted-foreground">
-                            {formatBytes(asset.size)}
-                            {isDownloading && (
-                              <span className="ml-2">已下载 {formatBytes(downloadedBytes)}</span>
-                            )}
+                          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                            <span>{formatBytes(asset.size)}</span>
+                            {isDownloading && <span>已下载 {formatBytes(downloadedBytes)}</span>}
+                            {progress != null && <span>{Math.round(progress * 100)}%</span>}
                           </div>
                         </div>
                         {isDownloaded ? (
-                          <Button type="button" size="icon" variant="outline" onClick={() => onOpenAssetFolder(asset.name)}>
+                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => onOpenAssetFolder(asset.name)} aria-label="打开安装包所在文件夹">
                             <FolderOpen className="h-4 w-4" />
                           </Button>
                         ) : (
-                          <Button type="button" size="sm" onClick={() => void onDownloadAsset(asset)} disabled={Boolean(downloadingAsset)}>
-                            {isDownloading ? <Spinner className="mr-2 h-4 w-4" /> : <Download className="mr-2 h-4 w-4" />}
+                          <Button type="button" size="sm" className="h-8 px-2.5" onClick={() => void onDownloadAsset(asset)} disabled={Boolean(downloadingAsset)}>
+                            {isDownloading ? <Spinner className="mr-1.5 h-4 w-4" /> : <Download className="mr-1.5 h-4 w-4" />}
                             {isDownloading ? "下载中" : "下载"}
                           </Button>
                         )}
                       </div>
                       {isDownloading && (
-                        <div className="mt-3 space-y-2">
-                          <Progress value={Math.round((progress ?? 0) * 100)} />
-                          <div className="text-xs text-muted-foreground">
+                        <div className="mt-2 space-y-1.5">
+                          <Progress value={Math.round((progress ?? 0) * 100)} className="h-1.5" />
+                          <div className="text-[11px] text-muted-foreground">
                             {progress == null
                               ? `${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)}`
                               : `${Math.round(progress * 100)}% (${formatBytes(downloadedBytes)} / ${formatBytes(totalBytes)})`}
