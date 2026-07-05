@@ -77,6 +77,8 @@ interface EditorState {
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
+  creatingParentId: string | null
+  renamingNodeId: string | null
   shouldResetScroll: boolean
   setShouldResetScroll: (value: boolean) => void
   fileScrollPositions: Record<string, { editor: number; preview: number }>
@@ -111,9 +113,14 @@ interface EditorState {
     sourceModified?: number | null,
     isDirty?: boolean,
   ) => void
-  startCreating: (type: "file" | "folder") => void
+  startCreating: (type: "file" | "folder", parentId?: string | null) => void
   confirmCreate: (name: string) => void
   cancelCreate: () => void
+  startRenaming: (id: string) => void
+  confirmRename: (id: string, newName: string) => Promise<void>
+  cancelRename: () => void
+  deleteNode: (id: string) => Promise<void>
+  removeNode: (id: string) => void
   moveNode: (nodeId: string, targetFolderId: string) => void
   saveFile: () => Promise<void>
   saveFileAs: () => Promise<void>
@@ -272,6 +279,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   wordCount: 0,
   charCount: 0,
   creatingType: null,
+  creatingParentId: null,
+  renamingNodeId: null,
   shouldResetScroll: false,
   fileScrollPositions: {},
 
@@ -661,34 +670,94 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }))
   },
 
-  startCreating: (type: "file" | "folder") => {
-    set({ creatingType: type })
+  startCreating: (type: "file" | "folder", parentId?: string | null) => {
+    // Auto-expand the parent folder if it's collapsed
+    if (parentId) {
+      const parent = get().findNodeById(parentId)
+      if (parent && parent.type === "folder" && !parent.isExpanded) {
+        const expandNode = (nodes: FileNode[]): FileNode[] => {
+          return nodes.map((node) => {
+            if (node.id === parentId) {
+              return { ...node, isExpanded: true }
+            }
+            if (node.children) {
+              return { ...node, children: expandNode(node.children) }
+            }
+            return node
+          })
+        }
+        set((state) => ({ files: expandNode(state.files) }))
+      }
+    }
+    set({ creatingType: type, creatingParentId: parentId ?? null })
   },
 
   confirmCreate: (name: string) => {
-    const { creatingType } = get()
+    const { creatingType, creatingParentId } = get()
     if (!creatingType || !name.trim()) {
-      set({ creatingType: null })
+      set({ creatingType: null, creatingParentId: null })
       return
     }
+
+    const parentNode = creatingParentId ? get().findNodeById(creatingParentId) : null
+    const parentPath = parentNode?.filePath || null
 
     const newNode: FileNode = {
       id: `${creatingType}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       name: name.trim(),
       type: creatingType,
       ...(creatingType === "folder"
-        ? { isExpanded: false, children: [] }
-        : { content: "", hasExternalChanges: false, isNew: true }),
+        ? {
+            isExpanded: false,
+            children: [],
+            filePath: parentPath ? `${parentPath}/${name.trim()}` : undefined,
+          }
+        : {
+            content: "",
+            hasExternalChanges: false,
+            isNew: !parentPath,
+            filePath: parentPath ? `${parentPath}/${name.trim()}` : undefined,
+          }),
     }
 
-    set((state) => ({
-      files: [...state.files, newNode],
-      creatingType: null,
-      ...(creatingType === "file" && {
-        activeFileId: newNode.id,
-        content: "",
-      }),
-    }))
+    if (creatingParentId) {
+      // Insert into the target folder
+      const insertIntoFolder = (nodes: FileNode[]): FileNode[] => {
+        return nodes.map((node) => {
+          if (node.id === creatingParentId && node.type === "folder") {
+            return {
+              ...node,
+              children: [...(node.children || []), newNode],
+              isExpanded: true,
+            }
+          }
+          if (node.children) {
+            return { ...node, children: insertIntoFolder(node.children) }
+          }
+          return node
+        })
+      }
+      set((state) => ({
+        files: insertIntoFolder(state.files),
+        creatingType: null,
+        creatingParentId: null,
+        ...(creatingType === "file" && {
+          activeFileId: newNode.id,
+          content: "",
+        }),
+      }))
+    } else {
+      // Insert at root
+      set((state) => ({
+        files: [...state.files, newNode],
+        creatingType: null,
+        creatingParentId: null,
+        ...(creatingType === "file" && {
+          activeFileId: newNode.id,
+          content: "",
+        }),
+      }))
+    }
 
     // Update word/char counts for new file
     if (creatingType === "file") {
@@ -697,7 +766,128 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   cancelCreate: () => {
-    set({ creatingType: null })
+    set({ creatingType: null, creatingParentId: null })
+  },
+
+  startRenaming: (id: string) => {
+    set({ renamingNodeId: id })
+  },
+
+  confirmRename: async (id: string, newName: string) => {
+    const node = get().findNodeById(id)
+    if (!node || !newName.trim()) {
+      set({ renamingNodeId: null })
+      return
+    }
+
+    const trimmedName = newName.trim()
+    if (trimmedName === node.name) {
+      set({ renamingNodeId: null })
+      return
+    }
+
+    // If node has a real file path, rename on disk
+    if (node.filePath) {
+      const segments = node.filePath.split(/[\\/]/)
+      segments[segments.length - 1] = trimmedName
+      const newPath = segments.join("/")
+
+      try {
+        await invoke("rename_file", { oldPath: node.filePath, newPath })
+
+        // Update this node and all children paths recursively
+        const updatePaths = (n: FileNode, oldBase: string, newBase: string): FileNode => {
+          const updated = { ...n }
+          if (updated.filePath) {
+            updated.filePath = updated.filePath.replace(oldBase, newBase)
+          }
+          if (updated.children) {
+            updated.children = updated.children.map((child) =>
+              updatePaths(child, oldBase, newBase),
+            )
+          }
+          return updated
+        }
+
+        set((state) => ({
+          files: updateFileInNodes(state.files, id, (n) =>
+            updatePaths({ ...n, name: trimmedName }, node.filePath!, newPath),
+          ),
+          renamingNodeId: null,
+        }))
+
+        toast.success(`已重命名: ${trimmedName}`, {
+          style: { backgroundColor: "#22c55e", color: "#fff" },
+        })
+      } catch (e) {
+        toast.error(`重命名失败: ${e instanceof Error ? e.message : String(e)}`, {
+          style: { backgroundColor: "#ef4444", color: "#fff" },
+        })
+        set({ renamingNodeId: null })
+      }
+    } else {
+      // In-memory only node, just update name
+      set((state) => ({
+        files: updateFileInNodes(state.files, id, (n) => ({ ...n, name: trimmedName })),
+        renamingNodeId: null,
+      }))
+    }
+  },
+
+  cancelRename: () => {
+    set({ renamingNodeId: null })
+  },
+
+  deleteNode: async (id: string) => {
+    const node = get().findNodeById(id)
+    if (!node) return
+
+    // Delete from disk if it has a real path
+    if (node.filePath) {
+      try {
+        if (node.type === "folder") {
+          await invoke("delete_directory", { path: node.filePath })
+        } else {
+          await invoke("delete_file", { path: node.filePath })
+        }
+      } catch (e) {
+        toast.error(`删除失败: ${e instanceof Error ? e.message : String(e)}`, {
+          style: { backgroundColor: "#ef4444", color: "#fff" },
+        })
+        return
+      }
+    }
+
+    // Remove from tree
+    get().removeNode(id)
+    toast.success(`已删除: ${node.name}`, {
+      style: { backgroundColor: "#22c55e", color: "#fff" },
+    })
+  },
+
+  removeNode: (id: string) => {
+    const { activeFileId } = get()
+
+    const removeFromNodes = (nodes: FileNode[]): FileNode[] => {
+      return nodes
+        .filter((node) => node.id !== id)
+        .map((node) => {
+          if (node.children) {
+            return { ...node, children: removeFromNodes(node.children) }
+          }
+          return node
+        })
+    }
+
+    const newFiles = removeFromNodes(get().files)
+
+    // If the removed node was active, clear selection
+    if (activeFileId === id) {
+      set({ files: newFiles, activeFileId: null, content: "" })
+      get().updateCounts("")
+    } else {
+      set({ files: newFiles })
+    }
   },
 
   moveNode: (nodeId: string, targetFolderId: string) => {

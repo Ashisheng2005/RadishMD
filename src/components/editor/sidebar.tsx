@@ -17,7 +17,7 @@ export function Sidebar() {
         isSidebarOpen ? "w-64" : "w-0"
       )}
     >
-      <div className="flex-1 flex flex-col min-w-[256px]">
+      <div className="flex-1 flex flex-col min-w-[256px] min-h-0">
         {/* Search */}
         <div className="p-3 border-b border-sidebar-border">
           <div className="relative">

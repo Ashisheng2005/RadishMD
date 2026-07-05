@@ -153,6 +153,12 @@ fn read_file_snapshot(path: String) -> Result<FileSnapshot, String> {
 
 #[tauri::command]
 fn write_file(path: String, content: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+    if let Some(parent) = file_path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
     fs::write(&path, content).map_err(|e| e.to_string())
 }
 
@@ -530,6 +536,120 @@ fn clear_file_watcher() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
+    let old = PathBuf::from(&old_path);
+    let new = PathBuf::from(&new_path);
+
+    if !old.exists() {
+        return Err(format!("Source path does not exist: {}", old_path));
+    }
+
+    if new.exists() {
+        return Err(format!("Target path already exists: {}", new_path));
+    }
+
+    fs::rename(&old, &new).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_file(path: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+
+    if !file_path.exists() {
+        return Err(format!("File does not exist: {}", path));
+    }
+
+    if !file_path.is_file() {
+        return Err(format!("Not a file: {}", path));
+    }
+
+    fs::remove_file(&file_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_directory(path: String) -> Result<(), String> {
+    let dir_path = PathBuf::from(&path);
+
+    if !dir_path.exists() {
+        return Err(format!("Directory does not exist: {}", path));
+    }
+
+    if !dir_path.is_dir() {
+        return Err(format!("Not a directory: {}", path));
+    }
+
+    fs::remove_dir_all(&dir_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_file(path: String, content: String) -> Result<(), String> {
+    let file_path = PathBuf::from(&path);
+
+    if file_path.exists() {
+        return Err(format!("File already exists: {}", path));
+    }
+
+    if let Some(parent) = file_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    fs::write(&file_path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_directory(path: String) -> Result<(), String> {
+    let dir_path = PathBuf::from(&path);
+
+    if dir_path.exists() {
+        return Err(format!("Directory already exists: {}", path));
+    }
+
+    fs::create_dir_all(&dir_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reveal_in_explorer(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+
+    if !target.exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg("-R")
+            .arg(&target)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let dir = if target.is_dir() {
+            target.clone()
+        } else {
+            target.parent().unwrap_or(&target).to_path_buf()
+        };
+        std::process::Command::new("xdg-open")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn confirm_close(app: tauri::AppHandle) {
     CLOSE_CONFIRMED.store(true, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window("main") {
@@ -560,6 +680,12 @@ pub fn run() {
             cancel_download,
             watch_file_changes,
             clear_file_watcher,
+            rename_file,
+            delete_file,
+            delete_directory,
+            create_file,
+            create_directory,
+            reveal_in_explorer,
             confirm_close
         ])
         .setup(|app| {

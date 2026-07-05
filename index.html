@@ -8,6 +8,23 @@
   </head>
 
   <body>
+    <script>
+      // Prevent white flash: apply dark theme immediately before React renders
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('radishmd.theme')
+          var theme = stored ? JSON.parse(stored).state?.theme : 'system'
+          if (!theme) theme = 'system'
+          var isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          if (isDark) document.documentElement.classList.add('dark')
+        } catch (e) {
+          // Fallback: check system preference
+          if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.add('dark')
+          }
+        }
+      })()
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -34,7 +34,7 @@ const child = spawn(viteBinary, ["--port", String(devPort), "--strictPort"], {
   cwd: projectRoot,
   detached: true,
   stdio: "ignore",
-  shell: false,
+  shell: true,
 })
 
 child.unref()
