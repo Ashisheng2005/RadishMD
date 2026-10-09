@@ -67,7 +67,7 @@ export function StatusBar() {
       return
     }
 
-    await saveFileById(activeFile.id)
+    await saveFileById(activeFile.id, true)
   }
 
   return (

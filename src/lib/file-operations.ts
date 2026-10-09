@@ -1,12 +1,14 @@
 import { open } from "@tauri-apps/plugin-dialog"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core"
-import { normalizeFilePath, readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
+import { filePathIdentity, normalizeFilePath, readFileSnapshot, FileNode, useEditorStore } from "./editor-store"
+import {
+  getCachedDirectoryEntries,
+  invalidateDirectoryCache,
+  setCachedDirectoryEntries,
+  type CachedDirectoryEntry,
+} from "./directory-cache"
 
-interface DirectoryEntry {
-  name: string
-  path: string
-  is_directory: boolean
-}
+type DirectoryEntry = CachedDirectoryEntry
 
 const textFileExtensions = [
   "md",
@@ -82,6 +84,15 @@ function createNodeFromEntry(entry: DirectoryEntry): FileNode | null {
     filePath: normalizedPath,
     isDirty: false,
     hasExternalChanges: false,
+    kind: normalizedPath.toLowerCase().endsWith(".pdf")
+      ? "pdf"
+      : ["md", "markdown"].includes(getFileExtension(normalizedPath))
+        ? "markdown"
+        : "text",
+    canEdit: !normalizedPath.toLowerCase().endsWith(".pdf"),
+    canSaveText: !normalizedPath.toLowerCase().endsWith(".pdf"),
+    editVersion: 0,
+    savedVersion: 0,
   }
 }
 
@@ -95,7 +106,7 @@ function sortNodes(nodes: FileNode[]) {
   })
 }
 
-export async function loadFolderChildren(folderId: string): Promise<FileNode[]> {
+export async function loadFolderChildren(folderId: string, options: { force?: boolean; throwOnError?: boolean } = {}): Promise<FileNode[]> {
   const store = useEditorStore.getState()
   const folder = store.findNodeById(folderId)
 
@@ -106,9 +117,14 @@ export async function loadFolderChildren(folderId: string): Promise<FileNode[]> 
   store.setFolderLoading(folderId, true)
 
   try {
-    const entries = await invoke<DirectoryEntry[]>("read_directory_entries", {
-      path: normalizeFilePath(folder.filePath),
+    const normalizedPath = normalizeFilePath(folder.filePath)
+    const cachedEntries = options.force ? null : getCachedDirectoryEntries(normalizedPath)
+    const entries = cachedEntries ?? await invoke<DirectoryEntry[]>("read_directory_entries", {
+      path: normalizedPath,
     })
+    if (!cachedEntries) {
+      setCachedDirectoryEntries(normalizedPath, entries)
+    }
     const children = sortNodes(entries.map(createNodeFromEntry).filter((node): node is FileNode => Boolean(node)))
 
     const latestStore = useEditorStore.getState()
@@ -118,6 +134,7 @@ export async function loadFolderChildren(folderId: string): Promise<FileNode[]> 
   } catch (error) {
     useEditorStore.getState().setFolderLoading(folderId, false)
     console.error("[RadishMD][openFolder] load children failed", error)
+    if (options.throwOnError) throw error
     return []
   }
 }
@@ -139,7 +156,10 @@ export async function openFolder(): Promise<void> {
   await openFolderPath(folderPath)
 }
 
-export async function openFolderPath(folderPath: string): Promise<void> {
+export async function openFolderPath(
+  folderPath: string,
+  options: { activateFirstFile?: boolean; forceReload?: boolean } = {},
+): Promise<void> {
   const normalizedFolderPath = normalizeFilePath(folderPath)
   const store = useEditorStore.getState()
 
@@ -161,11 +181,11 @@ export async function openFolderPath(folderPath: string): Promise<void> {
     return
   }
 
-  const children = await loadFolderChildren(rootFolder.id)
+  const children = await loadFolderChildren(rootFolder.id, { force: options.forceReload !== false })
   const firstFile = children.find((node) => node.type === "file")
 
-  if (firstFile) {
-    void useEditorStore.getState().setActiveFile(firstFile.id)
+  if (firstFile && options.activateFirstFile !== false) {
+    await useEditorStore.getState().setActiveFile(firstFile.id)
     store.setShouldResetScroll(true)
 
     const targetPath = firstFile.filePath ?? null
@@ -180,16 +200,83 @@ export async function openFolderPath(folderPath: string): Promise<void> {
   }
 }
 
-export async function openExternalPath(path: string): Promise<void> {
+export async function openExternalPath(
+  path: string,
+  options: { activate?: boolean; forceReload?: boolean } = {},
+): Promise<void> {
   const normalizedPath = normalizeFilePath(path)
   const isDirectory = await invoke<boolean>("is_directory", { path: normalizedPath })
 
   if (isDirectory) {
-    await openFolderPath(normalizedPath)
+    await openFolderPath(normalizedPath, {
+      activateFirstFile: options.activate !== false,
+      forceReload: options.forceReload,
+    })
     return
   }
 
-  await useEditorStore.getState().openFileFromPath(normalizedPath)
+  await useEditorStore.getState().openFileFromPath(normalizedPath, { activate: options.activate !== false })
+}
+
+export async function restoreExpandedFolders(folderPaths: string[]) {
+  const normalizedPaths = [...new Set(folderPaths.map(normalizeFilePath).filter(Boolean))]
+    .sort((left, right) => left.split(/[\\/]/).length - right.split(/[\\/]/).length)
+
+  for (const folderPath of normalizedPaths) {
+    const folder = await ensureTreeNodeByPath(folderPath, "folder")
+    if (!folder) {
+      continue
+    }
+
+    if (!folder.isLoaded) {
+      await loadFolderChildren(folder.id)
+    }
+
+    useEditorStore.getState().setFolderExpanded(folder.id, true)
+  }
+}
+
+// Load just the path's ancestors, without changing their expanded state.
+export async function ensureTreeNodeByPath(path: string, type: FileNode["type"] = "file"): Promise<FileNode | null> {
+  const key = filePathIdentity(path)
+  const find = () => type === "file"
+    ? useEditorStore.getState().findNodeByPath(path)
+    : useEditorStore.getState().findFolderByPath(path)
+  const existing = find()
+  if (existing) return existing
+
+  const containsPath = (node: FileNode) => {
+    const folderKey = filePathIdentity(node.filePath)
+    return node.type === "folder" && Boolean(folderKey) &&
+      key.startsWith(folderKey.endsWith("/") ? folderKey : `${folderKey}/`)
+  }
+  let folder = useEditorStore.getState().files.filter(containsPath)
+    .sort((left, right) => (right.filePath?.length ?? 0) - (left.filePath?.length ?? 0))[0]
+  while (folder) {
+    const children = folder.isLoaded ? folder.children ?? [] : await loadFolderChildren(folder.id)
+    const found = find()
+    if (found) return found
+    folder = children.find(containsPath)!
+  }
+  return null
+}
+
+export async function refreshFolder(folderId: string): Promise<void> {
+  const folder = useEditorStore.getState().findNodeById(folderId)
+  if (!folder || folder.type !== "folder" || !folder.filePath) return
+  invalidateDirectoryCache(folder.filePath)
+  // Refresh already loaded descendants too; leave unvisited folders lazy.
+  const refresh = async (id: string): Promise<void> => {
+    const children = await loadFolderChildren(id, { force: true, throwOnError: true })
+    for (const child of children) {
+      if (child.type === "folder" && child.isLoaded) await refresh(child.id)
+    }
+  }
+  await refresh(folderId)
+}
+
+export function invalidateFolderCacheForPath(path: string) {
+  invalidateDirectoryCache(normalizeFilePath(path))
 }
 
 export async function importFiles(): Promise<void> {
@@ -262,6 +349,11 @@ export async function importFiles(): Promise<void> {
       content,
       filePath: normalizedFilePath,
       sourceModified: modified,
+      kind: isPdf ? "pdf" : ["md", "markdown"].includes(getFileExtension(normalizedFilePath)) ? "markdown" : "text",
+      canEdit: !isPdf,
+      canSaveText: !isPdf,
+      editVersion: 0,
+      savedVersion: 0,
     }
 
     newFiles.push(newFile)

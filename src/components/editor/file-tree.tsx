@@ -152,12 +152,28 @@ function InlineRenameInput({
   )
 }
 
+function filterNodes(nodes: FileNode[], query: string): FileNode[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  if (!normalizedQuery) return nodes
+
+  return nodes.reduce<FileNode[]>((result, node) => {
+    const matchesSelf = node.name.toLocaleLowerCase().includes(normalizedQuery)
+    const children = node.children ? filterNodes(node.children, normalizedQuery) : []
+    if (matchesSelf || children.length > 0) {
+      result.push({ ...node, children: node.type === "folder" ? (matchesSelf ? node.children : children) : node.children })
+    }
+    return result
+  }, [])
+}
+
 function FileTreeItem({
   node,
   depth = 0,
+  filter = "",
 }: {
   node: FileNode
   depth?: number
+  filter?: string
 }) {
   const {
     activeFileId,
@@ -213,7 +229,7 @@ function FileTreeItem({
   }
 
   const handleFolderClick = () => {
-    const shouldLoad = !node.isExpanded
+    const shouldLoad = !node.isLoaded
     toggleFolder(node.id)
 
     if (shouldLoad) {
@@ -271,7 +287,7 @@ function FileTreeItem({
             ) : null}
           </button>
         </FileTreeContextMenu>
-        {node.isExpanded && (
+        {(node.isExpanded || Boolean(filter.trim())) && (
           <div>
             {/* Inline create inside this folder */}
             {isCreatingHere && creatingType && (
@@ -283,7 +299,7 @@ function FileTreeItem({
               />
             )}
             {node.children?.map((child) => (
-              <FileTreeItem key={child.id} node={child} depth={depth + 1} />
+              <FileTreeItem key={child.id} node={child} depth={depth + 1} filter={filter} />
             ))}
           </div>
         )}
@@ -348,8 +364,9 @@ function FileTreeItem({
   )
 }
 
-export function FileTree() {
+export function FileTree({ filter = "" }: { filter?: string }) {
   const { files, creatingType, creatingParentId, confirmCreate, cancelCreate } = useEditorStore()
+  const visibleFiles = filterNodes(files, filter)
 
   return (
     <div className="py-2">
@@ -362,8 +379,8 @@ export function FileTree() {
           onCancel={cancelCreate}
         />
       )}
-      {files.map((node) => (
-        <FileTreeItem key={node.id} node={node} />
+      {visibleFiles.map((node) => (
+        <FileTreeItem key={node.id} node={node} filter={filter} />
       ))}
     </div>
   )

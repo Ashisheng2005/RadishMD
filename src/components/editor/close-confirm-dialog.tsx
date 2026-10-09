@@ -12,14 +12,16 @@ import { FileText } from "lucide-react"
 interface CloseConfirmDialogProps {
   open: boolean
   unsavedFiles: { id: string; name: string }[]
-  onConfirm: () => void
+  onSaveAndClose: () => void
+  onDiscard: () => void
   onCancel: () => void
 }
 
 export function CloseConfirmDialog({
   open,
   unsavedFiles,
-  onConfirm,
+  onSaveAndClose,
+  onDiscard,
   onCancel,
 }: CloseConfirmDialogProps) {
   return (
@@ -33,7 +35,7 @@ export function CloseConfirmDialog({
         </DialogHeader>
         <div className="py-4">
           <p className="text-sm text-muted-foreground mb-3">
-            以下文件有未保存的更改，关闭后更改将丢失：
+            以下文件有未保存的更改，请选择处理方式：
           </p>
           <div className="space-y-2 max-h-40 overflow-y-auto">
             {unsavedFiles.map((file) => (
@@ -51,8 +53,11 @@ export function CloseConfirmDialog({
           <Button variant="outline" onClick={onCancel}>
             取消
           </Button>
-          <Button variant="destructive" onClick={onConfirm}>
-            确定关闭
+          <Button variant="destructive" onClick={onDiscard}>
+            不保存并关闭
+          </Button>
+          <Button onClick={onSaveAndClose}>
+            保存并关闭
           </Button>
         </DialogFooter>
       </DialogContent>
