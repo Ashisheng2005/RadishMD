@@ -142,16 +142,13 @@ export function Block({
       setLocalContent(newValue)
       contentRef.current = newValue
 
-      // Debounce the onUpdate call
+      // Keep the document buffer authoritative so an immediate save cannot
+      // observe a pending block-local debounce.
       if (debounceRef.current) {
         clearTimeout(debounceRef.current)
-      }
-      debounceRef.current = window.setTimeout(() => {
         debounceRef.current = null
-        if (contentRef.current !== block.content) {
-          onUpdate(contentRef.current)
-        }
-      }, 300)
+      }
+      onUpdate(newValue)
     },
     [block.content, onUpdate]
   )

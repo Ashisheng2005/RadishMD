@@ -13,7 +13,8 @@ import { cn } from "@/lib/utils"
 import { UpdateDialog } from "./update-dialog"
 import { CloseConfirmDialog } from "./close-confirm-dialog"
 import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
-import { openExternalPath } from "@/lib/file-operations"
+import { ensureTreeNodeByPath, openExternalPath, restoreExpandedFolders } from "@/lib/file-operations"
+import { loadEditorSession, saveEditorSession, type PersistedEditorSession } from "@/lib/editor-session"
 import {
   checkLatestRelease,
   cancelDownload,
@@ -48,6 +49,11 @@ export function Editor() {
   const activeDownloadIdRef = useRef<string | null>(null)
   const hasAutoCheckedUpdate = useRef(false)
   const handledOpenedFilePathsRef = useRef(new Set<string>())
+  const sessionRestoreTaskRef = useRef<Promise<void> | null>(null)
+  const sessionRestoringRef = useRef(false)
+  const startupExternalOpenRef = useRef(false)
+  const sessionSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSessionJsonRef = useRef<string | null>(null)
   const CHECK_UPDATE_MIN_LOADING_MS = 800
   const updateCheckState = checkingForUpdate
     ? "checking"
@@ -81,6 +87,91 @@ export function Editor() {
     return state.findNodeById(state.activeFileId)?.filePath ?? null
   })
 
+  const getSessionSnapshot = (): PersistedEditorSession => {
+    const state = useEditorStore.getState()
+    const currentActiveFilePath = state.activeFileId
+      ? state.findNodeById(state.activeFileId)?.filePath ?? null
+      : null
+    const expandedFolderPaths: string[] = []
+    const scrollPositions: PersistedEditorSession["scrollPositions"] = {}
+    const rootPaths = state.files
+      .map((node) => node.filePath)
+      .filter((path): path is string => Boolean(path))
+
+    const visit = (nodes: typeof state.files) => {
+      for (const node of nodes) {
+        if (node.type === "folder" && node.isExpanded && node.filePath) {
+          expandedFolderPaths.push(node.filePath)
+        }
+        if (node.type === "file" && node.filePath) {
+          const position = state.fileScrollPositions[node.id]
+          if (position) {
+            scrollPositions[node.filePath] = position
+          }
+        }
+        if (node.children) {
+          visit(node.children)
+        }
+      }
+    }
+
+    visit(state.files)
+
+    return {
+      version: 1,
+      rootPaths,
+      activeFilePath: currentActiveFilePath,
+      expandedFolderPaths,
+      scrollPositions,
+      isSidebarOpen: state.isSidebarOpen,
+      isOutlineOpen: state.isOutlineOpen,
+      editMode: state.editMode,
+      splitViewMode: state.splitViewMode,
+    }
+  }
+
+  const persistEditorSession = async () => {
+    if (!isTauriRuntime() || sessionRestoringRef.current) {
+      return
+    }
+
+    const session = getSessionSnapshot()
+    const serialized = JSON.stringify(session)
+    if (serialized === lastSessionJsonRef.current) {
+      return
+    }
+
+    try {
+      await saveEditorSession(session)
+      lastSessionJsonRef.current = serialized
+    } catch (error) {
+      console.warn("[RadishMD][session] save failed", error)
+    }
+  }
+
+  const scheduleSessionSave = () => {
+    if (!isTauriRuntime() || sessionRestoringRef.current) {
+      return
+    }
+
+    if (sessionSaveTimerRef.current) {
+      clearTimeout(sessionSaveTimerRef.current)
+    }
+
+    sessionSaveTimerRef.current = setTimeout(() => {
+      sessionSaveTimerRef.current = null
+      void persistEditorSession()
+    }, 400)
+  }
+
+  const flushSessionSave = async () => {
+    if (sessionSaveTimerRef.current) {
+      clearTimeout(sessionSaveTimerRef.current)
+      sessionSaveTimerRef.current = null
+    }
+    await persistEditorSession()
+  }
+
   const openFilePathOnce = (filePath: string) => {
     const normalizedFilePath = normalizeFilePath(filePath)
 
@@ -97,6 +188,7 @@ export function Editor() {
       return
     }
 
+    startupExternalOpenRef.current = true
     handledOpenedFilePathsRef.current.add(normalizedFilePath)
     console.log("[RadishMD][Editor] openFilePathOnce dispatch", { normalizedFilePath })
     void openExternalPath(normalizedFilePath)
@@ -296,20 +388,6 @@ export function Editor() {
   }, [theme])
 
   useEffect(() => {
-    // Check for file opened via file association on app startup
-    if (!isTauriRuntime()) {
-      return
-    }
-
-    invoke<string | null>("get_cli_file_path").then((filePath) => {
-      console.log("[RadishMD][Editor] get_cli_file_path", { filePath })
-      if (filePath) {
-        openFilePathOnce(filePath)
-      }
-    })
-  }, [])
-
-  useEffect(() => {
     if (!isTauriRuntime()) {
       return
     }
@@ -318,29 +396,134 @@ export function Editor() {
     let cancelled = false
 
     void listen<string>("radishmd://file-opened", (event) => {
-      console.log("[RadishMD][Editor] radishmd://file-opened", {
-        payload: event.payload,
-      })
       openFilePathOnce(event.payload)
     }).then((dispose) => {
       if (cancelled) {
         dispose()
         return
       }
-
       unlisten = dispose
-    })
-
-    void invoke<string[]>("take_opened_files").then((filePaths) => {
-      console.log("[RadishMD][Editor] take_opened_files", { filePaths })
-      for (const filePath of filePaths) {
-        openFilePathOnce(filePath)
-      }
     })
 
     return () => {
       cancelled = true
       unlisten?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime() || sessionRestoreTaskRef.current) {
+      return
+    }
+
+    sessionRestoringRef.current = true
+
+    const task = (async () => {
+      let startupOpenPaths: string[] = []
+      try {
+        const [cliFilePath, pendingOpenedFiles] = await Promise.all([
+          invoke<string | null>("get_cli_file_path").catch(() => null),
+          invoke<string[]>("take_opened_files").catch(() => []),
+        ])
+        startupOpenPaths = [cliFilePath, ...pendingOpenedFiles]
+          .filter((path): path is string => Boolean(path))
+          .map(normalizeFilePath)
+          .filter(Boolean)
+        const session = await loadEditorSession().catch((error) => {
+          console.warn("[RadishMD][session] load failed", error)
+          return null
+        })
+        if (!session) {
+          for (const path of startupOpenPaths) {
+            handledOpenedFilePathsRef.current.add(path)
+            await openExternalPath(path)
+          }
+          return
+        }
+
+        useEditorStore.setState({
+          isSidebarOpen: session.isSidebarOpen,
+          isOutlineOpen: session.isOutlineOpen,
+          editMode: session.editMode,
+          splitViewMode: session.splitViewMode,
+        })
+
+        for (const rootPath of session.rootPaths) {
+          try {
+            await openExternalPath(rootPath, { activate: false, forceReload: false })
+          } catch (error) {
+            console.warn("[RadishMD][session] failed to restore path", rootPath, error)
+          }
+        }
+
+        const expandedPathKeys = new Set(session.expandedFolderPaths.map((path) => normalizeFilePath(path)))
+        for (const rootPath of session.rootPaths) {
+          const rootFolder = useEditorStore.getState().findFolderByPath(rootPath)
+          if (rootFolder && rootFolder.filePath && !expandedPathKeys.has(normalizeFilePath(rootFolder.filePath))) {
+            useEditorStore.getState().setFolderExpanded(rootFolder.id, false)
+          }
+        }
+
+        await restoreExpandedFolders(session.expandedFolderPaths)
+
+        const restoredScrollPositions: Record<string, { editor: number; preview: number }> = {}
+        for (const [path, position] of Object.entries(session.scrollPositions)) {
+          const node = useEditorStore.getState().findNodeByPath(path)
+          if (node?.type === "file") {
+            restoredScrollPositions[node.id] = position
+          }
+        }
+        useEditorStore.setState({ fileScrollPositions: restoredScrollPositions })
+
+        if (startupOpenPaths.length > 0) {
+          for (const path of startupOpenPaths) {
+            handledOpenedFilePathsRef.current.add(path)
+            await openExternalPath(path)
+          }
+        } else if (!startupExternalOpenRef.current && session.activeFilePath) {
+          const activeFile = await ensureTreeNodeByPath(session.activeFilePath)
+          if (activeFile?.type === "file") {
+            await useEditorStore.getState().setActiveFile(activeFile.id)
+          }
+        }
+      } catch (error) {
+        console.warn("[RadishMD][session] restore failed", error)
+        for (const path of startupOpenPaths) {
+          if (handledOpenedFilePathsRef.current.has(path)) {
+            continue
+          }
+          try {
+            handledOpenedFilePathsRef.current.add(path)
+            await openExternalPath(path)
+          } catch (openError) {
+            console.warn("[RadishMD][session] failed to open startup path", path, openError)
+          }
+        }
+      } finally {
+        sessionRestoringRef.current = false
+        scheduleSessionSave()
+      }
+    })()
+    sessionRestoreTaskRef.current = task
+
+    return undefined
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      return
+    }
+
+    const unsubscribe = useEditorStore.subscribe(() => {
+      scheduleSessionSave()
+    })
+
+    return () => {
+      unsubscribe()
+      if (sessionSaveTimerRef.current) {
+        clearTimeout(sessionSaveTimerRef.current)
+        sessionSaveTimerRef.current = null
+      }
     }
   }, [])
 
@@ -459,7 +642,9 @@ export function Editor() {
         setUnsavedFilesForClose(unsaved.map(f => ({ id: f.id, name: f.name })))
         setCloseConfirmOpen(true)
       } else {
-        void invoke("confirm_close")
+        void flushSessionSave().finally(() => {
+          void invoke("confirm_close")
+        })
       }
     }).then((dispose) => {
       unlisten = dispose
@@ -470,9 +655,27 @@ export function Editor() {
     }
   }, [])
 
-  const handleCloseConfirm = () => {
+  const handleCloseSaveAndClose = async () => {
+    const store = useEditorStore.getState()
+    for (const file of store.getUnsavedFiles()) {
+      if (!(await store.saveFileById(file.id))) {
+        return
+      }
+    }
+    if (store.getUnsavedFiles().length > 0) {
+      toast.error("保存期间文件又发生了修改，请重试")
+      return
+    }
     setCloseConfirmOpen(false)
-    void invoke("confirm_close")
+    await flushSessionSave()
+    await invoke("confirm_close")
+  }
+
+  const handleCloseDiscard = () => {
+    setCloseConfirmOpen(false)
+    void flushSessionSave().finally(() => {
+      void invoke("confirm_close")
+    })
   }
 
   const handleCloseCancel = () => {
@@ -515,7 +718,8 @@ export function Editor() {
       <CloseConfirmDialog
         open={closeConfirmOpen}
         unsavedFiles={unsavedFilesForClose}
-        onConfirm={handleCloseConfirm}
+        onSaveAndClose={() => void handleCloseSaveAndClose()}
+        onDiscard={handleCloseDiscard}
         onCancel={handleCloseCancel}
       />
     </div>

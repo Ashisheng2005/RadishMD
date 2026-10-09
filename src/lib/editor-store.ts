@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { invoke, convertFileSrc } from "@tauri-apps/api/core"
 import { save } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
+import { invalidateDirectoryCache } from "./directory-cache"
 
 export interface FileNode {
   id: string
@@ -17,6 +18,11 @@ export interface FileNode {
   isDirty?: boolean
   hasExternalChanges?: boolean
   isNew?: boolean
+  kind?: "markdown" | "text" | "pdf" | "other"
+  canEdit?: boolean
+  canSaveText?: boolean
+  editVersion?: number
+  savedVersion?: number
 }
 
 interface FileSnapshot {
@@ -107,9 +113,10 @@ interface EditorState {
   findNodeByPath: (filePath: string) => FileNode | null
   findFolderByPath: (folderPath: string) => FileNode | null
   setFolderLoading: (id: string, isLoading: boolean) => void
+  setFolderExpanded: (id: string, expanded: boolean) => void
   replaceFolderChildren: (id: string, children: FileNode[]) => void
   activateFileById: (id: string) => void
-  saveFileById: (id: string) => Promise<void>
+  saveFileById: (id: string, forceOverwrite?: boolean) => Promise<boolean>
   reloadFileFromDiskById: (id: string) => Promise<void>
   checkActiveFileForExternalChanges: () => Promise<void>
   updateFileContent: (
@@ -119,22 +126,109 @@ interface EditorState {
     isDirty?: boolean,
   ) => void
   startCreating: (type: "file" | "folder", parentId?: string | null) => void
-  confirmCreate: (name: string) => void
+  confirmCreate: (name: string) => Promise<void>
   cancelCreate: () => void
   startRenaming: (id: string) => void
   confirmRename: (id: string, newName: string) => Promise<void>
   cancelRename: () => void
-  deleteNode: (id: string) => Promise<void>
-  removeNode: (id: string) => void
-  moveNode: (nodeId: string, targetFolderId: string) => void
-  saveFile: () => Promise<void>
-  saveFileAs: () => Promise<void>
-  openFileFromPath: (filePath: string) => Promise<void>
+  deleteNode: (id: string, force?: boolean) => Promise<boolean>
+  removeNode: (id: string, force?: boolean) => boolean
+  moveNode: (nodeId: string, targetFolderId: string) => Promise<void>
+  saveFile: () => Promise<boolean>
+  saveFileAs: () => Promise<boolean>
+  openFileFromPath: (filePath: string, options?: { activate?: boolean }) => Promise<void>
   hasUnsavedChanges: () => boolean
   getUnsavedFiles: () => FileNode[]
+  getUnsavedFilesUnderNode: (id: string) => FileNode[]
 }
 
 const initialFiles: FileNode[] = []
+
+const saveQueues = new Map<string, Promise<void>>()
+
+function enqueueDocumentSave(id: string, operation: () => Promise<void>) {
+  const previous = saveQueues.get(id) ?? Promise.resolve()
+  const next = previous.catch(() => undefined).then(operation)
+  saveQueues.set(id, next)
+  const cleanup = () => {
+    if (saveQueues.get(id) === next) {
+      saveQueues.delete(id)
+    }
+  }
+  void next.then(cleanup, cleanup)
+  return next
+}
+export function filePathIdentity(filePath?: string) {
+  if (!filePath) return ""
+  const raw = normalizeFilePath(filePath).replace(/\\/g, "/")
+  if (!raw) return ""
+  const isUnc = raw.startsWith("//")
+  const isRoot = raw === "/" || /^[A-Za-z]:\/$/.test(raw)
+  const normalized = isRoot ? raw : raw.replace(/\/{2,}/g, "/").replace(/\/$/, "")
+  // Windows paths are case-insensitive; preserve case on other platforms.
+  return (/^[A-Za-z]:\//.test(normalized) || isUnc)
+    ? normalized.toLowerCase()
+    : normalized
+}
+
+function getFileKind(filePath?: string): FileNode["kind"] {
+  const extension = filePath?.split(/[\\/]/).pop()?.split(".").pop()?.toLowerCase() ?? ""
+  if (extension === "pdf") return "pdf"
+  if (extension === "md" || extension === "markdown") return "markdown"
+  if (["txt", "text", "json", "jsonc", "yaml", "yml", "toml", "csv", "log", "xml", "ini", "env"].includes(extension)) {
+    return "text"
+  }
+  return "other"
+}
+
+function getNodeKind(node: FileNode) {
+  return node.kind ?? getFileKind(node.filePath)
+}
+
+function canSaveText(node: FileNode) {
+  return node.type === "file" && node.canSaveText !== false && getNodeKind(node) !== "pdf"
+}
+
+function getEditVersion(node: FileNode) {
+  return node.editVersion ?? 0
+}
+
+function validateNodeName(name: string) {
+  const trimmed = name.trim()
+  if (!trimmed || trimmed === "." || trimmed === "..") {
+    return "名称不能为空"
+  }
+  if (/[\\/:*?"<>|\u0000-\u001f]/.test(trimmed) || /[ .]$/.test(trimmed)) {
+    return "名称包含非法字符或以空格、句点结尾"
+  }
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i.test(trimmed)) {
+    return "名称不能使用 Windows 保留名称"
+  }
+  return null
+}
+
+function joinPath(parentPath: string, name: string) {
+  return `${parentPath.replace(/[\\/]$/, "")}/${name}`
+}
+
+function collectFiles(node: FileNode, result: FileNode[] = []) {
+  if (node.type === "file") {
+    result.push(node)
+    return result
+  }
+
+  for (const child of node.children ?? []) {
+    collectFiles(child, result)
+  }
+
+  return result
+}
+
+function hasUnsavedDescendant(node: FileNode): boolean {
+  return node.type === "file"
+    ? Boolean(node.isDirty || node.isNew)
+    : Boolean(node.children?.some(hasUnsavedDescendant))
+}
 
 function debugEditorLog(label: string, details?: Record<string, unknown>) {
   if (details) {
@@ -247,8 +341,9 @@ function mergeTreeNodes(existing: FileNode[], incoming: FileNode[]): FileNode[] 
 
 function findFolderByPath(nodes: FileNode[], filePath?: string): FileNode | null {
   if (!filePath) return null
+  const identity = filePathIdentity(filePath)
   for (const node of nodes) {
-    if (node.type === "folder" && node.filePath === filePath) return node
+    if (node.type === "folder" && filePathIdentity(node.filePath) === identity) return node
     if (node.children) {
       const found = findFolderByPath(node.children, filePath)
       if (found) return found
@@ -259,8 +354,9 @@ function findFolderByPath(nodes: FileNode[], filePath?: string): FileNode | null
 
 function findFileByPath(nodes: FileNode[], filePath?: string): FileNode | null {
   if (!filePath) return null
+  const identity = filePathIdentity(filePath)
   for (const node of nodes) {
-    if (node.type === "file" && node.filePath === filePath) return node
+    if (node.type === "file" && filePathIdentity(node.filePath) === identity) return node
     if (node.children) {
       const found = findFileByPath(node.children, filePath)
       if (found) return found
@@ -275,12 +371,12 @@ function mergeRefreshedChildren(existing: FileNode[] = [], incoming: FileNode[])
 
   for (const node of existing) {
     if (node.filePath) {
-      existingByPath.set(node.filePath, node)
+      existingByPath.set(filePathIdentity(node.filePath), node)
     }
   }
 
   const merged = incoming.map((incomingNode) => {
-    const existingNode = incomingNode.filePath ? existingByPath.get(incomingNode.filePath) : null
+    const existingNode = incomingNode.filePath ? existingByPath.get(filePathIdentity(incomingNode.filePath)) : null
 
     if (!existingNode) {
       return incomingNode
@@ -289,6 +385,7 @@ function mergeRefreshedChildren(existing: FileNode[] = [], incoming: FileNode[])
     if (incomingNode.type === "folder" && existingNode.type === "folder") {
       return {
         ...incomingNode,
+        id: existingNode.id,
         children: existingNode.children ?? incomingNode.children,
         isExpanded: existingNode.isExpanded ?? incomingNode.isExpanded,
         isLoaded: existingNode.isLoaded ?? incomingNode.isLoaded,
@@ -304,20 +401,26 @@ function mergeRefreshedChildren(existing: FileNode[] = [], incoming: FileNode[])
 
       return {
         ...incomingNode,
+        id: existingNode.id,
         content: shouldPreserveLoadedContent ? existingNode.content : incomingNode.content,
         sourceModified: shouldPreserveLoadedContent ? existingNode.sourceModified : incomingNode.sourceModified,
         isDirty: existingNode.isDirty ?? incomingNode.isDirty,
         hasExternalChanges: existingNode.hasExternalChanges ?? incomingNode.hasExternalChanges,
         isNew: existingNode.isNew ?? incomingNode.isNew,
+        kind: existingNode.kind ?? incomingNode.kind,
+        canEdit: existingNode.canEdit ?? incomingNode.canEdit,
+        canSaveText: existingNode.canSaveText ?? incomingNode.canSaveText,
+        editVersion: existingNode.editVersion ?? incomingNode.editVersion,
+        savedVersion: existingNode.savedVersion ?? incomingNode.savedVersion,
       }
     }
 
     return incomingNode
   })
 
-  const incomingPaths = new Set(incoming.map((node) => node.filePath).filter(Boolean))
+  const incomingPaths = new Set(incoming.map((node) => filePathIdentity(node.filePath)).filter(Boolean))
   for (const node of existing) {
-    if (node.filePath && !incomingPaths.has(node.filePath) && (node.isDirty || node.isNew)) {
+    if (node.filePath && !incomingPaths.has(filePathIdentity(node.filePath)) && hasUnsavedDescendant(node)) {
       preservedUnsaved.push(node)
     }
   }
@@ -520,6 +623,17 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => ({ files: toggleInNodes(state.files) }))
   },
 
+  setFolderExpanded: (id: string, expanded: boolean) => {
+    const updateExpanded = (nodes: FileNode[]): FileNode[] => nodes.map((node) => {
+      if (node.id === id && node.type === "folder") {
+        return { ...node, isExpanded: expanded }
+      }
+      return node.children ? { ...node, children: updateExpanded(node.children) } : node
+    })
+
+    set((state) => ({ files: updateExpanded(state.files) }))
+  },
+
   updateCounts: (content: string) => {
     const charCount = content.length
     const wordCount = content
@@ -557,11 +671,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   findNodeByPath: (filePath: string) => {
-    const normalizedFilePath = normalizeFilePath(filePath)
+    if (!normalizeFilePath(filePath)) return null
+    const normalizedFilePath = filePathIdentity(filePath)
 
     const findInNodes = (nodes: FileNode[]): FileNode | null => {
       for (const node of nodes) {
-        if (node.type === "file" && node.filePath === normalizedFilePath) return node
+        if (node.type === "file" && filePathIdentity(node.filePath) === normalizedFilePath) return node
         if (node.children) {
           const found = findInNodes(node.children)
           if (found) return found
@@ -573,7 +688,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   findFolderByPath: (folderPath: string) => {
-    return findFolderByPath(get().files, normalizeFilePath(folderPath))
+    return findFolderByPath(get().files, folderPath)
   },
 
   setFolderLoading: (id: string, isLoading: boolean) => {
@@ -723,6 +838,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         filePath: file.filePath,
         error: error instanceof Error ? error.message : String(error),
       })
+      set((state) => ({
+        files: updateFileInNodes(state.files, activeFileId, (node) => ({
+          ...node,
+          hasExternalChanges: true,
+        })),
+      }))
+      toast.warning(`文件无法读取，已保留本地内容: ${file.name}`)
     }
   },
 
@@ -739,6 +861,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         content,
         ...(sourceModified !== undefined ? { sourceModified } : {}),
         ...(isDirty !== undefined ? { isDirty } : {}),
+        editVersion: content === node.content ? getEditVersion(node) : getEditVersion(node) + 1,
       })),
     }))
   },
@@ -765,7 +888,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ creatingType: type, creatingParentId: parentId ?? null })
   },
 
-  confirmCreate: (name: string) => {
+  confirmCreate: async (name: string) => {
     const { creatingType, creatingParentId } = get()
     if (!creatingType || !name.trim()) {
       set({ creatingType: null, creatingParentId: null })
@@ -774,22 +897,54 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const parentNode = creatingParentId ? get().findNodeById(creatingParentId) : null
     const parentPath = parentNode?.filePath || null
+    const trimmedName = name.trim()
+    const validationError = validateNodeName(trimmedName)
+
+    if (validationError) {
+      toast.error(`创建失败: ${validationError}`)
+      return
+    }
+
+    const newPath = parentPath ? joinPath(parentPath, trimmedName) : undefined
+    if (newPath && get().findNodeByPath(newPath)) {
+      toast.error(`创建失败: 已存在同名文件: ${trimmedName}`)
+      return
+    }
+
+    if (newPath && parentNode?.type === "folder") {
+      try {
+        if (creatingType === "folder") {
+          await invoke("create_directory", { path: newPath })
+        } else {
+          await invoke("create_file", { path: newPath, content: "" })
+        }
+      } catch (error) {
+        toast.error(`创建失败: ${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
+      invalidateDirectoryCache(parentPath ?? newPath)
+    }
 
     const newNode: FileNode = {
       id: `${creatingType}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      name: name.trim(),
+      name: trimmedName,
       type: creatingType,
       ...(creatingType === "folder"
         ? {
             isExpanded: false,
             children: [],
-            filePath: parentPath ? `${parentPath}/${name.trim()}` : undefined,
+            filePath: newPath,
           }
         : {
             content: "",
             hasExternalChanges: false,
-            isNew: !parentPath,
-            filePath: parentPath ? `${parentPath}/${name.trim()}` : undefined,
+            isNew: !newPath,
+            filePath: newPath,
+            kind: getFileKind(newPath),
+            canEdit: true,
+            canSaveText: true,
+            editVersion: 0,
+            savedVersion: newPath ? 0 : -1,
           }),
     }
 
@@ -854,6 +1009,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     const trimmedName = newName.trim()
+    const validationError = validateNodeName(trimmedName)
+    if (validationError) {
+      toast.error(`重命名失败: ${validationError}`)
+      return
+    }
     if (trimmedName === node.name) {
       set({ renamingNodeId: null })
       return
@@ -864,15 +1024,30 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       const segments = node.filePath.split(/[\\/]/)
       segments[segments.length - 1] = trimmedName
       const newPath = segments.join("/")
+      const existingTarget = get().findNodeByPath(newPath)
+      if (existingTarget && existingTarget.id !== id) {
+        toast.error(`重命名失败: 已存在同名文件: ${trimmedName}`)
+        set({ renamingNodeId: null })
+        return
+      }
 
       try {
         await invoke("rename_file", { oldPath: node.filePath, newPath })
+        invalidateDirectoryCache(node.filePath)
+        invalidateDirectoryCache(newPath)
 
         // Update this node and all children paths recursively
         const updatePaths = (n: FileNode, oldBase: string, newBase: string): FileNode => {
           const updated = { ...n }
           if (updated.filePath) {
-            updated.filePath = updated.filePath.replace(oldBase, newBase)
+            const normalizedOld = normalizeFilePath(oldBase).replace(/\\/g, "/").replace(/\/$/, "")
+            const normalizedNew = normalizeFilePath(newBase).replace(/\\/g, "/").replace(/\/$/, "")
+            const currentPath = normalizeFilePath(updated.filePath).replace(/\\/g, "/")
+            updated.filePath = filePathIdentity(updated.filePath) === filePathIdentity(oldBase)
+              ? normalizedNew
+              : currentPath.startsWith(`${normalizedOld}/`)
+                ? `${normalizedNew}${updated.filePath.slice(normalizedOld.length)}`
+                : updated.filePath
           }
           if (updated.children) {
             updated.children = updated.children.map((child) =>
@@ -911,9 +1086,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set({ renamingNodeId: null })
   },
 
-  deleteNode: async (id: string) => {
+  deleteNode: async (id: string, force = false) => {
     const node = get().findNodeById(id)
-    if (!node) return
+    if (!node) return false
+
+    const unsavedFiles = collectFiles(node).filter((file) => file.isNew || file.isDirty)
+    if (unsavedFiles.length > 0 && !force) {
+      toast.error(`删除前请先处理 ${unsavedFiles.length} 个未保存文件`)
+      return false
+    }
 
     // Delete from disk if it has a real path
     if (node.filePath) {
@@ -927,19 +1108,31 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         toast.error(`删除失败: ${e instanceof Error ? e.message : String(e)}`, {
           style: { backgroundColor: "#ef4444", color: "#fff" },
         })
-        return
+        return false
       }
+      invalidateDirectoryCache(node.filePath)
     }
 
     // Remove from tree
-    get().removeNode(id)
+    get().removeNode(id, true)
     toast.success(`已删除: ${node.name}`, {
       style: { backgroundColor: "#22c55e", color: "#fff" },
     })
+    return true
   },
 
-  removeNode: (id: string) => {
+  removeNode: (id: string, force = false) => {
     const { activeFileId } = get()
+    const node = get().findNodeById(id)
+    if (!node) return false
+
+    const unsavedFiles = collectFiles(node).filter((file) => file.isNew || file.isDirty)
+    if (unsavedFiles.length > 0 && !force) {
+      toast.error(`移除前请先处理 ${unsavedFiles.length} 个未保存文件`)
+      return false
+    }
+
+    const removedIds = new Set(collectFiles(node).map((file) => file.id))
 
     const removeFromNodes = (nodes: FileNode[]): FileNode[] => {
       return nodes
@@ -955,262 +1148,354 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     const newFiles = removeFromNodes(get().files)
 
     // If the removed node was active, clear selection
-    if (activeFileId === id) {
+    if (activeFileId === id || removedIds.has(activeFileId ?? "")) {
       set({ files: newFiles, activeFileId: null, content: "" })
       get().updateCounts("")
     } else {
       set({ files: newFiles })
     }
+    return true
   },
 
-  moveNode: (nodeId: string, targetFolderId: string) => {
+  moveNode: async (nodeId: string, targetFolderId: string) => {
     const state = get()
-    let nodeToMove: FileNode | null = null
+    const nodeToMove = state.findNodeById(nodeId)
+    const targetFolder = state.findNodeById(targetFolderId)
+    if (!nodeToMove || !targetFolder || targetFolder.type !== "folder" || nodeToMove.id === targetFolder.id) return
 
-    // Find and remove the node from its current location
-    const removeNode = (nodes: FileNode[]): FileNode[] => {
-      return nodes.filter((node) => {
-        if (node.id === nodeId) {
-          nodeToMove = node
-          return false
-        }
-        if (node.children) {
-          node.children = removeNode(node.children)
-        }
-        return true
-      })
-    }
-
-    // Add the node to the target folder
-    const addNodeToFolder = (nodes: FileNode[]): FileNode[] => {
-      return nodes.map((node) => {
-        if (node.id === targetFolderId && node.type === "folder") {
-          return {
-            ...node,
-            children: [...(node.children || []), { ...nodeToMove!, children: undefined }],
-            isExpanded: true,
-          }
-        }
-        if (node.children) {
-          node.children = addNodeToFolder(node.children)
-        }
-        return node
-      })
-    }
-
-    const filesWithoutNode = removeNode(state.files)
-    if (nodeToMove) {
-      set({ files: addNodeToFolder(filesWithoutNode) })
-    }
-  },
-
-  saveFile: async () => {
-    const { activeFileId, content } = get()
-    if (!activeFileId) return
-
-    const file = get().findNodeById(activeFileId)
-    if (!file || file.type !== "file" || !file.filePath) {
-      // No file path, do Save As
-      debugEditorLog("saveFile:redirect-to-save-as", {
-        activeFileId,
-        contentLength: content.length,
-      })
-      await get().saveFileAs()
+    const containsId = (node: FileNode, id: string): boolean =>
+      node.id === id || Boolean(node.children?.some((child) => containsId(child, id)))
+    if (containsId(nodeToMove, targetFolderId)) {
+      toast.error("不能将文件夹移动到自身或其子目录")
       return
     }
 
-    // Direct save
+    const oldPath = nodeToMove.filePath
+    const targetPath = targetFolder.filePath
+    const newPath = oldPath && targetPath ? joinPath(targetPath, nodeToMove.name) : undefined
+    if (newPath && filePathIdentity(newPath) === filePathIdentity(oldPath)) return
+
+    if (newPath && oldPath) {
+      try {
+        await invoke("move_path", { oldPath, newPath })
+      } catch (error) {
+        toast.error(`移动失败: ${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
+      invalidateDirectoryCache(oldPath)
+      invalidateDirectoryCache(newPath)
+    }
+
+    const updatePaths = (node: FileNode): FileNode => {
+      const updated = { ...node }
+      if (oldPath && newPath && updated.filePath) {
+        const normalizedOld = normalizeFilePath(oldPath).replace(/\\/g, "/").replace(/\/$/, "")
+        const normalizedNew = normalizeFilePath(newPath).replace(/\\/g, "/").replace(/\/$/, "")
+        const currentPath = normalizeFilePath(updated.filePath).replace(/\\/g, "/")
+        updated.filePath = filePathIdentity(updated.filePath) === filePathIdentity(oldPath)
+          ? normalizedNew
+          : currentPath.startsWith(`${normalizedOld}/`)
+            ? `${normalizedNew}${updated.filePath.slice(normalizedOld.length)}`
+            : updated.filePath
+      }
+      if (updated.children) updated.children = updated.children.map(updatePaths)
+      return updated
+    }
+
+    const removeFromNodes = (nodes: FileNode[]): { nodes: FileNode[]; removed: FileNode | null } => {
+      let removed: FileNode | null = null
+      const next: FileNode[] = []
+      for (const node of nodes) {
+        if (node.id === nodeId) {
+          removed = node
+          continue
+        }
+        if (node.children) {
+          const result = removeFromNodes(node.children)
+          if (result.removed) removed = result.removed
+          next.push({ ...node, children: result.nodes })
+        } else {
+          next.push(node)
+        }
+      }
+      return { nodes: next, removed }
+    }
+
+    const removedResult = removeFromNodes(state.files)
+    if (!removedResult.removed) return
+    const moved = updatePaths(removedResult.removed)
+    const addToTarget = (nodes: FileNode[]): FileNode[] => nodes.map((node) => {
+      if (node.id === targetFolderId) {
+        return { ...node, children: [...(node.children ?? []), moved], isExpanded: true, isLoaded: true }
+      }
+      return node.children ? { ...node, children: addToTarget(node.children) } : node
+    })
+    set({ files: addToTarget(removedResult.nodes) })
+  },
+
+  saveFile: async () => {
+    const { activeFileId } = get()
+    if (!activeFileId) return false
+
+    const file = get().findNodeById(activeFileId)
+    if (!file || file.type !== "file") return false
+    if (!canSaveText(file)) {
+      toast.info(`文件不可作为文本保存: ${file.name}`)
+      return false
+    }
+    if (!file.filePath) {
+      return get().saveFileAs()
+    }
+
+    const id = activeFileId
     try {
-      suppressExternalChangeChecks(file.filePath)
-      debugEditorLog("saveFile:start", {
-        activeFileId,
-        filePath: file.filePath,
-        fileName: file.name,
-        contentLength: content.length,
-        files: summarizeFiles(get().files),
+      await enqueueDocumentSave(id, async () => {
+        const current = get().findNodeById(id)
+        if (!current || current.type !== "file" || !current.filePath || !canSaveText(current)) {
+          throw new Error("文件已不可保存")
+        }
+
+        const path = current.filePath
+        const capturedVersion = getEditVersion(current)
+        const capturedContent = current.content ?? ""
+        suppressExternalChangeChecks(path)
+        debugEditorLog("saveFile:start", {
+          id,
+          filePath: path,
+          fileName: current.name,
+          contentLength: capturedContent.length,
+          capturedVersion,
+        })
+
+        const snapshot = await invoke<FileSnapshot>("write_file_atomic", {
+          path,
+          content: capturedContent,
+          expectedModified: current.sourceModified,
+        })
+
+        set((state) => ({
+          files: updateFileInNodes(state.files, id, (node) => {
+            const currentVersion = getEditVersion(node)
+            return {
+              ...node,
+              sourceModified: snapshot.modified,
+              savedVersion: capturedVersion,
+              isDirty: currentVersion !== capturedVersion,
+              isNew: false,
+              hasExternalChanges: false,
+            }
+          }),
+        }))
+        lastExternalChangeWarningKey = null
+        toast.success(`已保存: ${current.name}`, {
+          style: { backgroundColor: "#22c55e", color: "#fff" },
+        })
       })
-      await invoke("write_file", { path: file.filePath, content })
-      const snapshot = await readFileSnapshot(file.filePath)
-      set((state) => ({
-        files: updateFileInNodes(state.files, activeFileId, (node) => ({
-          ...node,
-          sourceModified: snapshot.modified,
-          isDirty: false,
-          isNew: false,
-            hasExternalChanges: false,
-        })),
-      }))
-      lastExternalChangeWarningKey = null
-      debugEditorLog("saveFile:success", {
-        activeFileId,
-        filePath: file.filePath,
-        snapshotModified: snapshot.modified,
-        files: summarizeFiles(get().files),
-      })
-      toast.success(`已保存: ${file.name}`, {
-        style: { backgroundColor: "#22c55e", color: "#fff" },
-      })
-    } catch (e) {
-      toast.error(`保存失败: ${file.name}`, {
+      return true
+    } catch (error) {
+      if (String(error).includes("conflict")) {
+        set((state) => ({
+          files: updateFileInNodes(state.files, id, (node) => ({ ...node, hasExternalChanges: true })),
+        }))
+      }
+      toast.error(`保存失败: ${file.name}: ${error instanceof Error ? error.message : String(error)}`, {
         style: { backgroundColor: "#ef4444", color: "#fff" },
       })
+      return false
     }
   },
 
   saveFileAs: async () => {
-    const { activeFileId, content } = get()
-    if (!activeFileId) return
+    const { activeFileId } = get()
+    if (!activeFileId) return false
 
     const file = get().findNodeById(activeFileId)
-    if (!file || file.type !== "file") return
+    if (!file || file.type !== "file") return false
+    if (!canSaveText(file)) {
+      toast.info(`文件不可作为文本另存: ${file.name}`)
+      return false
+    }
 
     const selected = await save({
-      filters: [{ name: "Markdown", extensions: ["md"] }],
+      filters: [{ name: "Text and Markdown", extensions: ["md", "markdown", "txt", "json", "yaml", "yml", "toml", "csv", "log", "xml", "ini", "env"] }],
       defaultPath: file.name,
     })
+    if (!selected) return false
 
-    if (!selected) return
-
-    try {
-      suppressExternalChangeChecks(selected)
-      debugEditorLog("saveFileAs:start", {
-        activeFileId,
-        selected,
-        contentLength: content.length,
-        files: summarizeFiles(get().files),
-      })
-      await invoke("write_file", { path: selected, content })
-      const snapshot = await readFileSnapshot(selected)
-
-      // Update file path and name in store
-      const newName = selected.split(/[\\/]/).pop() || file.name
-      set((state) => ({
-        files: updateFileInNodes(state.files, activeFileId, (node) => ({
-          ...node,
-          filePath: selected,
-          name: newName,
-          content,
-          sourceModified: snapshot.modified,
-          isDirty: false,
-          isNew: false,
-          hasExternalChanges: false,
-        })),
-      }))
-      lastExternalChangeWarningKey = null
-      debugEditorLog("saveFileAs:success", {
-        activeFileId,
-        selected,
-        snapshotModified: snapshot.modified,
-        files: summarizeFiles(get().files),
-      })
-      toast.success(`已保存: ${newName}`, {
-        style: { backgroundColor: "#22c55e", color: "#fff" },
-      })
-    } catch (e) {
-      toast.error(`保存失败: ${selected}`, {
-        style: { backgroundColor: "#ef4444", color: "#fff" },
-      })
+    const id = activeFileId
+    const normalizedSelected = normalizeFilePath(selected)
+    const existingTarget = get().findNodeByPath(normalizedSelected)
+    if (existingTarget && existingTarget.id !== id) {
+      toast.error(`另存失败: 文件已在编辑器中打开: ${existingTarget.name}`)
+      return false
     }
-  },
+    try {
+      await enqueueDocumentSave(id, async () => {
+        const current = get().findNodeById(id)
+        if (!current || current.type !== "file" || !canSaveText(current)) {
+          throw new Error("文件已不可保存")
+        }
 
-  saveFileById: async (id: string) => {
-    const file = get().findNodeById(id)
-    if (!file || file.type !== "file") return
-
-    const content = file.content || ""
-
-    if (!file.filePath) {
-      const selected = await save({
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-        defaultPath: file.name,
-      })
-
-      if (!selected) return
-
-      try {
-        suppressExternalChangeChecks(selected)
-        debugEditorLog("saveFileById:save-as:start", {
-          id,
-          selected,
-          contentLength: content.length,
-          files: summarizeFiles(get().files),
+        const capturedVersion = getEditVersion(current)
+        const capturedContent = current.content ?? ""
+        suppressExternalChangeChecks(normalizedSelected)
+        const snapshot = await invoke<FileSnapshot>("write_file_atomic", {
+          path: normalizedSelected,
+          content: capturedContent,
+          expectedModified: null,
         })
-        await invoke("write_file", { path: selected, content })
-        const snapshot = await readFileSnapshot(selected)
-        const newName = selected.split(/[\\/]/).pop() || file.name
+        const newName = normalizedSelected.split(/[\\/]/).pop() || current.name
 
         set((state) => ({
           files: updateFileInNodes(state.files, id, (node) => ({
             ...node,
-            filePath: selected,
+            filePath: normalizedSelected,
             name: newName,
-            content,
+            kind: getFileKind(normalizedSelected),
+            canEdit: true,
+            canSaveText: true,
             sourceModified: snapshot.modified,
-            isDirty: false,
+            savedVersion: capturedVersion,
+            isDirty: getEditVersion(node) !== capturedVersion,
             isNew: false,
             hasExternalChanges: false,
           })),
         }))
         lastExternalChangeWarningKey = null
-
-        debugEditorLog("saveFileById:save-as:success", {
-          id,
-          selected,
-          snapshotModified: snapshot.modified,
-          files: summarizeFiles(get().files),
-        })
         toast.success(`已保存: ${newName}`, {
           style: { backgroundColor: "#22c55e", color: "#fff" },
         })
-      } catch {
-        toast.error(`保存失败: ${selected}`, {
-          style: { backgroundColor: "#ef4444", color: "#fff" },
-        })
-      }
-
-      return
-    }
-
-    try {
-      suppressExternalChangeChecks(file.filePath)
-      debugEditorLog("saveFileById:start", {
-        id,
-        filePath: file.filePath,
-        fileName: file.name,
-        contentLength: content.length,
-        files: summarizeFiles(get().files),
       })
-      await invoke("write_file", { path: file.filePath, content })
-      const snapshot = await readFileSnapshot(file.filePath)
-
-      set((state) => ({
-        files: updateFileInNodes(state.files, id, (node) => ({
-          ...node,
-          sourceModified: snapshot.modified,
-          isDirty: false,
-          isNew: false,
-          hasExternalChanges: false,
-        })),
-      }))
-      lastExternalChangeWarningKey = null
-
-      debugEditorLog("saveFileById:success", {
-        id,
-        filePath: file.filePath,
-        snapshotModified: snapshot.modified,
-        files: summarizeFiles(get().files),
-      })
-      toast.success(`已保存: ${file.name}`, {
-        style: { backgroundColor: "#22c55e", color: "#fff" },
-      })
-    } catch {
-      toast.error(`保存失败: ${file.name}`, {
+      return true
+    } catch (error) {
+      toast.error(`保存失败: ${normalizedSelected}: ${error instanceof Error ? error.message : String(error)}`, {
         style: { backgroundColor: "#ef4444", color: "#fff" },
       })
+      return false
     }
   },
 
-  openFileFromPath: async (filePath: string) => {
+  saveFileById: async (id: string, forceOverwrite = false) => {
+    const file = get().findNodeById(id)
+    if (!file || file.type !== "file") return false
+    if (!canSaveText(file)) {
+      toast.info(`文件不可作为文本保存: ${file.name}`)
+      return false
+    }
+
+    if (!file.filePath) {
+      const selected = await save({
+        filters: [{ name: "Text and Markdown", extensions: ["md", "markdown", "txt", "json", "yaml", "yml", "toml", "csv", "log", "xml", "ini", "env"] }],
+        defaultPath: file.name,
+      })
+      if (!selected) return false
+
+      const normalizedSelected = normalizeFilePath(selected)
+      const existingTarget = get().findNodeByPath(normalizedSelected)
+      if (existingTarget && existingTarget.id !== id) {
+        toast.error(`保存失败: 文件已在编辑器中打开: ${existingTarget.name}`)
+        return false
+      }
+      try {
+        await enqueueDocumentSave(id, async () => {
+          const current = get().findNodeById(id)
+          if (!current || current.type !== "file" || !canSaveText(current)) {
+            throw new Error("文件已不可保存")
+          }
+
+          const capturedVersion = getEditVersion(current)
+          const capturedContent = current.content ?? ""
+          suppressExternalChangeChecks(normalizedSelected)
+          const snapshot = await invoke<FileSnapshot>("write_file_atomic", {
+            path: normalizedSelected,
+            content: capturedContent,
+            expectedModified: null,
+          })
+          const newName = normalizedSelected.split(/[\\/]/).pop() || current.name
+
+          set((state) => ({
+            files: updateFileInNodes(state.files, id, (node) => ({
+              ...node,
+              filePath: normalizedSelected,
+              name: newName,
+              kind: getFileKind(normalizedSelected),
+              canEdit: true,
+              canSaveText: true,
+              sourceModified: snapshot.modified,
+              savedVersion: capturedVersion,
+              isDirty: getEditVersion(node) !== capturedVersion,
+              isNew: false,
+              hasExternalChanges: false,
+            })),
+          }))
+          lastExternalChangeWarningKey = null
+          toast.success(`已保存: ${newName}`, {
+            style: { backgroundColor: "#22c55e", color: "#fff" },
+          })
+        })
+        return true
+      } catch (error) {
+        if (String(error).includes("conflict")) {
+          set((state) => ({
+            files: updateFileInNodes(state.files, id, (node) => ({ ...node, hasExternalChanges: true })),
+          }))
+        }
+        toast.error(`保存失败: ${normalizedSelected}: ${error instanceof Error ? error.message : String(error)}`, {
+          style: { backgroundColor: "#ef4444", color: "#fff" },
+        })
+        return false
+      }
+    }
+
+    try {
+      await enqueueDocumentSave(id, async () => {
+        const current = get().findNodeById(id)
+        if (!current || current.type !== "file" || !current.filePath || !canSaveText(current)) {
+          throw new Error("文件已不可保存")
+        }
+
+        const currentPath = current.filePath
+        const capturedVersion = getEditVersion(current)
+        const capturedContent = current.content ?? ""
+        suppressExternalChangeChecks(currentPath)
+        const snapshot = await invoke<FileSnapshot>("write_file_atomic", {
+          path: currentPath,
+          content: capturedContent,
+          expectedModified: forceOverwrite ? null : current.sourceModified,
+        })
+
+        set((state) => ({
+          files: updateFileInNodes(state.files, id, (node) => {
+            const currentVersion = getEditVersion(node)
+            return {
+              ...node,
+              sourceModified: snapshot.modified,
+              savedVersion: capturedVersion,
+              isDirty: currentVersion !== capturedVersion,
+              isNew: false,
+              hasExternalChanges: false,
+            }
+          }),
+        }))
+        lastExternalChangeWarningKey = null
+        toast.success(`已保存: ${current.name}`, {
+          style: { backgroundColor: "#22c55e", color: "#fff" },
+        })
+      })
+      return true
+    } catch (error) {
+      if (String(error).includes("conflict")) {
+        set((state) => ({
+          files: updateFileInNodes(state.files, id, (node) => ({ ...node, hasExternalChanges: true })),
+        }))
+      }
+      toast.error(`保存失败: ${file.name}: ${error instanceof Error ? error.message : String(error)}`, {
+        style: { backgroundColor: "#ef4444", color: "#fff" },
+      })
+      return false
+    }
+  },
+  openFileFromPath: async (filePath: string, options: { activate?: boolean } = {}) => {
     try {
       const normalizedFilePath = normalizeFilePath(filePath)
       debugEditorLog("openFileFromPath:start", { filePath: normalizedFilePath, files: summarizeFiles(get().files) })
@@ -1225,7 +1510,9 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           fileName,
           existingFileId: existingFile.id,
         })
-        await get().setActiveFile(existingFile.id)
+        if (options.activate !== false) {
+          await get().setActiveFile(existingFile.id)
+        }
         toast.success(`已打开: ${fileName}`, {
           style: { backgroundColor: "#22c55e", color: "#fff" },
         })
@@ -1254,11 +1541,18 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         sourceModified,
         isDirty: false,
         hasExternalChanges: false,
+        kind: getFileKind(normalizedFilePath),
+        canEdit: !isPdf,
+        canSaveText: !isPdf,
+        editVersion: 0,
+        savedVersion: 0,
       }
 
       set((state) => ({ files: [...state.files, newFile] }))
-      set({ activeFileId: newFile.id, content })
-      get().updateCounts(isPdf ? "" : content)
+      if (options.activate !== false) {
+        set({ activeFileId: newFile.id, content })
+        get().updateCounts(isPdf ? "" : content)
+      }
 
       debugEditorLog("openFileFromPath:new-file", {
         filePath: normalizedFilePath,
@@ -1321,6 +1615,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     collectFiles(files)
     return unsaved
+  },
+
+  getUnsavedFilesUnderNode: (id: string) => {
+    const node = get().findNodeById(id)
+    if (!node) return []
+    return collectFiles(node).filter((file) => file.isNew || file.isDirty)
   },
 }))
 

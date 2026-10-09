@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Search, Import, FilePlus, FolderPlus, Folder } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useEditorStore } from "@/lib/editor-store"
@@ -8,6 +9,7 @@ import { importFiles, openFolder } from "@/lib/file-operations"
 
 export function Sidebar() {
   const { isSidebarOpen, startCreating } = useEditorStore()
+  const [fileFilter, setFileFilter] = useState("")
 
   return (
     <aside
@@ -24,6 +26,8 @@ export function Sidebar() {
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="搜索文件..."
+              value={fileFilter}
+              onChange={(event) => setFileFilter(event.target.value)}
               className="pl-8 h-8 bg-sidebar-accent border-none text-sm"
             />
           </div>
@@ -52,7 +56,7 @@ export function Sidebar() {
 
         {/* File Tree */}
         <div className="flex-1 overflow-y-auto">
-          <FileTree />
+          <FileTree filter={fileFilter} />
         </div>
       </div>
     </aside>

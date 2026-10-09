@@ -1,15 +1,18 @@
+use base64::{engine::general_purpose::STANDARD as base64_engine, Engine as _};
+use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, LazyLock, Mutex};
-use std::time::UNIX_EPOCH;
-use serde::{Deserialize, Serialize};
-use notify::{recommended_watcher, Event, RecommendedWatcher, RecursiveMode, Watcher};
-use tauri::{Emitter, WindowEvent};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, LazyLock, Mutex,
+};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+use tauri::{Emitter, WindowEvent};
 use tauri_plugin_cli::CliExt;
-use base64::{Engine as _, engine::general_purpose::STANDARD as base64_engine};
 
 const GITHUB_OWNER: &str = "Ashisheng2005";
 const GITHUB_REPO: &str = "RadishMD";
@@ -74,13 +77,11 @@ struct DirectoryEntry {
     is_directory: bool,
 }
 
-static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> = LazyLock::new(|| {
-    Mutex::new(None)
-});
+static FILE_WATCHER: LazyLock<Mutex<Option<(String, RecommendedWatcher)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
-static PENDING_OPENED_FILES: LazyLock<Mutex<Vec<String>>> = LazyLock::new(|| {
-    Mutex::new(Vec::new())
-});
+static PENDING_OPENED_FILES: LazyLock<Mutex<Vec<String>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 static CLOSE_CONFIRMED: AtomicBool = AtomicBool::new(false);
 
@@ -92,13 +93,19 @@ struct DownloadCancellationRegistry {
 impl DownloadCancellationRegistry {
     fn register(&self, download_id: &str) -> Result<Arc<AtomicBool>, String> {
         let token = Arc::new(AtomicBool::new(false));
-        let mut tokens = self.tokens.lock().map_err(|_| "Failed to lock download registry".to_string())?;
+        let mut tokens = self
+            .tokens
+            .lock()
+            .map_err(|_| "Failed to lock download registry".to_string())?;
         tokens.insert(download_id.to_string(), token.clone());
         Ok(token)
     }
 
     fn cancel(&self, download_id: &str) -> Result<bool, String> {
-        let tokens = self.tokens.lock().map_err(|_| "Failed to lock download registry".to_string())?;
+        let tokens = self
+            .tokens
+            .lock()
+            .map_err(|_| "Failed to lock download registry".to_string())?;
 
         if let Some(token) = tokens.get(download_id) {
             token.store(true, Ordering::SeqCst);
@@ -172,7 +179,8 @@ fn read_directory_entries(path: String) -> Result<Vec<DirectoryEntry>, String> {
     }
 
     entries.sort_by(|left, right| {
-        right.is_directory
+        right
+            .is_directory
             .cmp(&left.is_directory)
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
@@ -202,15 +210,135 @@ fn read_file_snapshot(path: String) -> Result<FileSnapshot, String> {
     Ok(FileSnapshot { content, modified })
 }
 
+fn modified_timestamp(path: &std::path::Path) -> Option<u64> {
+    fs::metadata(path)
+        .ok()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target_wide: Vec<u16> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            target_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), String> {
+    fs::rename(source, target).map_err(|e| e.to_string())
+}
+
+fn atomic_write_text(path: &std::path::Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Invalid file path".to_string())?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid file name".to_string())?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let temporary_path = parent.join(format!(
+        ".{}.radishmd-{}-{}.tmp",
+        file_name,
+        std::process::id(),
+        nonce
+    ));
+
+    let result = (|| -> Result<(), String> {
+        let mut temporary = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary_path)
+            .map_err(|e| e.to_string())?;
+        temporary
+            .write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
+        temporary.sync_all().map_err(|e| e.to_string())?;
+        drop(temporary);
+
+        // The temporary file lives beside the destination, so the platform
+        // replacement operation is atomic and keeps the old file on failure.
+        replace_file_atomically(&temporary_path, path)
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+
+    result
+}
+
 #[tauri::command]
 fn write_file(path: String, content: String) -> Result<(), String> {
     let file_path = PathBuf::from(&path);
-    if let Some(parent) = file_path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
+    if file_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        return Err("PDF 文件不支持文本写入".to_string());
     }
-    fs::write(&path, content).map_err(|e| e.to_string())
+    atomic_write_text(&file_path, &content)
+}
+
+#[tauri::command]
+fn write_file_atomic(
+    path: String,
+    content: String,
+    expected_modified: Option<u64>,
+) -> Result<FileSnapshot, String> {
+    let file_path = PathBuf::from(&path);
+    if file_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        return Err("PDF 文件不支持文本写入".to_string());
+    }
+    let current_modified = modified_timestamp(&file_path);
+    if expected_modified.is_some() && current_modified != expected_modified {
+        return Err("conflict: 文件已在外部修改".to_string());
+    }
+
+    atomic_write_text(&file_path, &content)?;
+    let modified = modified_timestamp(&file_path);
+    Ok(FileSnapshot { content, modified })
 }
 
 #[tauri::command]
@@ -268,7 +396,10 @@ fn read_file_as_data_url(path: String) -> Result<String, String> {
 fn get_cli_file_path(app: tauri::AppHandle) -> Option<String> {
     let cli = app.cli();
     let matches = cli.matches().ok()?;
-    matches.args.get("file").cloned()
+    matches
+        .args
+        .get("file")
+        .cloned()
         .and_then(|file_arg| file_arg.value.as_str().map(|s| s.to_string()))
 }
 
@@ -282,6 +413,31 @@ fn take_opened_files() -> Vec<String> {
         }
         Err(_) => Vec::new(),
     }
+}
+
+#[tauri::command]
+fn load_editor_session(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let session_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("session.json");
+
+    match fs::read_to_string(session_path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn save_editor_session(app: tauri::AppHandle, content: String) -> Result<(), String> {
+    let session_path = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("session.json");
+    atomic_write_text(&session_path, &content)
 }
 
 fn normalize_version(version: &str) -> String {
@@ -495,7 +651,8 @@ fn download_release_asset_blocking(
                 return Err("download cancelled".to_string());
             }
 
-            file.write_all(&buffer[..bytes_read]).map_err(|e| e.to_string())?;
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| e.to_string())?;
             downloaded_bytes += bytes_read as u64;
 
             let progress = total_bytes.map(|total| downloaded_bytes as f64 / total as f64);
@@ -536,7 +693,10 @@ fn download_release_asset_blocking(
 }
 
 #[tauri::command]
-fn cancel_download(download_id: String, cancellation_registry: tauri::State<'_, DownloadCancellationRegistry>) -> Result<(), String> {
+fn cancel_download(
+    download_id: String,
+    cancellation_registry: tauri::State<'_, DownloadCancellationRegistry>,
+) -> Result<(), String> {
     if cancellation_registry.cancel(&download_id)? {
         Ok(())
     } else {
@@ -570,7 +730,10 @@ fn watch_file_changes(app: tauri::AppHandle, file_path: String) -> Result<(), St
     .map_err(|e| e.to_string())?;
 
     watcher
-        .watch(PathBuf::from(&file_path).as_path(), RecursiveMode::NonRecursive)
+        .watch(
+            PathBuf::from(&file_path).as_path(),
+            RecursiveMode::NonRecursive,
+        )
         .map_err(|e| e.to_string())?;
 
     *watcher_slot = Some((file_path, watcher));
@@ -597,6 +760,29 @@ fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
 
     if new.exists() {
         return Err(format!("Target path already exists: {}", new_path));
+    }
+
+    fs::rename(&old, &new).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn move_path(old_path: String, new_path: String) -> Result<(), String> {
+    let old = PathBuf::from(&old_path);
+    let new = PathBuf::from(&new_path);
+
+    if !old.exists() {
+        return Err(format!("Source path does not exist: {}", old_path));
+    }
+    if new.exists() {
+        return Err(format!("Target path already exists: {}", new_path));
+    }
+    if let Some(parent) = new.parent() {
+        if !parent.is_dir() {
+            return Err(format!(
+                "Target directory does not exist: {}",
+                parent.display()
+            ));
+        }
     }
 
     fs::rename(&old, &new).map_err(|e| e.to_string())
@@ -644,7 +830,13 @@ fn create_file(path: String, content: String) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    fs::write(&file_path, content).map_err(|e| e.to_string())
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&file_path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -719,6 +911,7 @@ pub fn run() {
             read_file,
             read_file_snapshot,
             write_file,
+            write_file_atomic,
             get_file_name,
             read_directory,
             read_directory_entries,
@@ -727,6 +920,8 @@ pub fn run() {
             read_file_as_data_url,
             get_cli_file_path,
             take_opened_files,
+            load_editor_session,
+            save_editor_session,
             get_app_version,
             check_latest_release,
             download_release_asset,
@@ -734,6 +929,7 @@ pub fn run() {
             watch_file_changes,
             clear_file_watcher,
             rename_file,
+            move_path,
             delete_file,
             delete_directory,
             create_file,
@@ -780,7 +976,10 @@ pub fn run() {
                 return;
             }
 
-            eprintln!("[RadishMD][tauri] RunEvent::Opened file_paths={:?}", file_paths);
+            eprintln!(
+                "[RadishMD][tauri] RunEvent::Opened file_paths={:?}",
+                file_paths
+            );
             if let Ok(mut pending) = PENDING_OPENED_FILES.lock() {
                 pending.extend(file_paths.iter().cloned());
             }

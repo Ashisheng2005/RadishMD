@@ -10,6 +10,7 @@ import {
   FolderOpen,
   ChevronsDownUp,
   ChevronsUpDown,
+  RefreshCw,
 } from "lucide-react"
 import { FileNode, useEditorStore } from "@/lib/editor-store"
 import {
@@ -31,48 +32,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { toast } from "sonner"
 import { isTauriRuntime } from "@/lib/runtime"
-
-function countFilesInNode(node: FileNode): number {
-  if (node.type === "file") return 1
-  let count = 0
-  if (node.children) {
-    for (const child of node.children) {
-      count += countFilesInNode(child)
-    }
-  }
-  return count
-}
-
-function expandAllInNodes(nodes: FileNode[], targetId: string): FileNode[] {
-  return nodes.map((node) => {
-    if (node.id === targetId && node.type === "folder") {
-      return {
-        ...node,
-        isExpanded: true,
-        children: node.children?.map((child) =>
-          child.type === "folder"
-            ? expandAllRecursive(child)
-            : child,
-        ),
-      }
-    }
-    if (node.children) {
-      return { ...node, children: expandAllInNodes(node.children, targetId) }
-    }
-    return node
-  })
-}
-
-function expandAllRecursive(node: FileNode): FileNode {
-  if (node.type !== "folder") return node
-  return {
-    ...node,
-    isExpanded: true,
-    children: node.children?.map((child) =>
-      child.type === "folder" ? expandAllRecursive(child) : child,
-    ),
-  }
-}
+import { loadFolderChildren, refreshFolder } from "@/lib/file-operations"
 
 function collapseAllInNodes(nodes: FileNode[], targetId: string): FileNode[] {
   return nodes.map((node) => {
@@ -116,9 +76,25 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
     startRenaming,
     deleteNode,
     removeNode,
+    getUnsavedFilesUnderNode,
+    saveFileById,
   } = useEditorStore()
 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [deleteUnsavedDialogOpen, setDeleteUnsavedDialogOpen] = useState(false)
+  const [removeDialogOpen, setRemoveDialogOpen] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    try {
+      await refreshFolder(node.id)
+    } catch (error) {
+      toast.error(`刷新失败: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setRefreshing(false)
+    }
+  }
 
   const handleCopyPath = () => {
     if (node.filePath) {
@@ -140,10 +116,23 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
     }
   }
 
-  const handleExpandAll = () => {
-    useEditorStore.setState((state) => ({
-      files: expandAllInNodes(state.files, node.id),
-    }))
+  const handleExpandAll = async () => {
+    const expand = async (folderId: string): Promise<void> => {
+      const current = useEditorStore.getState().findNodeById(folderId)
+      if (!current || current.type !== "folder") return
+      const children = current.isLoaded ? (current.children ?? []) : await loadFolderChildren(folderId)
+      useEditorStore.setState((state) => {
+        const update = (nodes: FileNode[]): FileNode[] => nodes.map((item) => {
+          if (item.id === folderId) return { ...item, isExpanded: true }
+          return item.children ? { ...item, children: update(item.children) } : item
+        })
+        return { files: update(state.files) }
+      })
+      for (const child of children) {
+        if (child.type === "folder") await expand(child.id)
+      }
+    }
+    await expand(node.id)
   }
 
   const handleCollapseAll = () => {
@@ -157,11 +146,58 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
   }
 
   const confirmDelete = () => {
+    if (getUnsavedFilesUnderNode(node.id).length > 0) {
+      setDeleteDialogOpen(false)
+      setDeleteUnsavedDialogOpen(true)
+      return
+    }
     void deleteNode(node.id)
     setDeleteDialogOpen(false)
   }
 
-  const fileCount = node.type === "folder" ? countFilesInNode(node) : 0
+  const saveAndDelete = async () => {
+    const unsaved = getUnsavedFilesUnderNode(node.id)
+    for (const file of unsaved) {
+      if (!(await saveFileById(file.id))) return
+    }
+    const remaining = getUnsavedFilesUnderNode(node.id)
+    if (remaining.length > 0) {
+      toast.error("保存期间文件又发生了修改，请重试")
+      return
+    }
+    if (await deleteNode(node.id)) {
+      setDeleteUnsavedDialogOpen(false)
+    }
+  }
+
+  const discardAndDelete = async () => {
+    if (await deleteNode(node.id, true)) {
+      setDeleteUnsavedDialogOpen(false)
+    }
+  }
+
+  const handleRemove = () => {
+    const unsaved = getUnsavedFilesUnderNode(node.id)
+    if (unsaved.length > 0) {
+      setRemoveDialogOpen(true)
+      return
+    }
+    removeNode(node.id)
+  }
+
+  const saveAndRemove = async () => {
+    const unsaved = getUnsavedFilesUnderNode(node.id)
+    for (const file of unsaved) {
+      if (!(await saveFileById(file.id))) return
+    }
+    if (getUnsavedFilesUnderNode(node.id).length > 0) {
+      toast.error("保存期间文件又发生了修改，请重试")
+      return
+    }
+    if (removeNode(node.id, true)) {
+      setRemoveDialogOpen(false)
+    }
+  }
 
   return (
     <>
@@ -179,7 +215,13 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
                 新建文件夹
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={handleExpandAll}>
+              {node.filePath && isTauriRuntime() && (
+                <ContextMenuItem disabled={refreshing} onClick={() => void handleRefresh()}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  刷新目录
+                </ContextMenuItem>
+              )}
+              <ContextMenuItem onClick={() => void handleExpandAll()}>
                 <ChevronsUpDown className="mr-2 h-4 w-4" />
                 展开全部
               </ContextMenuItem>
@@ -194,7 +236,7 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
             <Pencil className="mr-2 h-4 w-4" />
             重命名
           </ContextMenuItem>
-          <ContextMenuItem onClick={() => removeNode(node.id)}>
+          <ContextMenuItem onClick={handleRemove}>
             <X className="mr-2 h-4 w-4" />
             从列表中移除
           </ContextMenuItem>
@@ -231,7 +273,7 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
             <AlertDialogTitle>确认删除</AlertDialogTitle>
             <AlertDialogDescription>
               {node.type === "folder"
-                ? `确定要删除文件夹「${node.name}」及其中的 ${fileCount} 个文件吗？此操作不可撤销。`
+                ? `确定要删除文件夹「${node.name}」及磁盘中的全部内容吗？未展开的子目录和附件也会被删除，此操作不可撤销。`
                 : `确定要删除文件「${node.name}」吗？此操作不可撤销。`}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -242,6 +284,51 @@ export function FileTreeContextMenu({ node, children }: FileTreeContextMenuProps
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={deleteUnsavedDialogOpen} onOpenChange={setDeleteUnsavedDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除前处理未保存内容</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{node.name}」中有未保存文件。请选择保存后删除、放弃修改，或取消操作。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => { event.preventDefault(); void discardAndDelete() }}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              放弃并删除
+            </AlertDialogAction>
+            <AlertDialogAction
+              onClick={(event) => { event.preventDefault(); void saveAndDelete() }}
+            >
+              保存后删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={removeDialogOpen} onOpenChange={setRemoveDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>移除前处理未保存内容</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{node.name}」中有未保存文件。请选择保存后移除、放弃修改，或取消操作。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { removeNode(node.id, true); setRemoveDialogOpen(false) }} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              放弃并移除
+            </AlertDialogAction>
+            <AlertDialogAction onClick={(event) => { event.preventDefault(); void saveAndRemove() }}>
+              保存后移除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
