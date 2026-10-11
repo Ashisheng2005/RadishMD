@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useRef, useState, useTransition } from "react"
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { ImageLightbox } from "./image-lightbox"
 import { renderMarkdownToHtmlChunks, type MarkdownRenderChunk } from "@/lib/markdown-render"
 import { resolveImageSource } from "@/lib/image-utils"
@@ -168,6 +168,19 @@ function processDisplayChunks(chunks: MarkdownRenderChunk[], baseFilePath: strin
   return resolveImagePathsInHtml(processedChunks, baseFilePath)
 }
 
+type DisplayChunkCacheEntry = {
+  sourceHtml: string
+  baseFilePath: string | null
+  processedHtml: string
+}
+
+const PreviewChunk = memo(function PreviewChunk({ html, sourceLine }: { html: string; sourceLine: number }) {
+  // Keep the innerHTML prop stable, including when only sourceLine changes.
+  // Mermaid writes SVG into this DOM after React has mounted the placeholder.
+  const innerHtml = useMemo(() => ({ __html: html }), [html])
+  return <div data-source-line={sourceLine} dangerouslySetInnerHTML={innerHtml} />
+})
+
 interface MarkdownRendererProps {
   content: string
   className?: string
@@ -185,12 +198,16 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   const renderDebounceTimerRef = useRef<number | null>(null)
   const chunkRenderTimerRef = useRef<number | null>(null)
   const chunkRenderTokenRef = useRef(0)
-  const latestRenderInputRef = useRef<{ content: string; activeFilePath: string | null }>({
+  const displayChunkCacheRef = useRef(new Map<string, DisplayChunkCacheEntry>())
+  const latestRenderInputRef = useRef<{ requestId: number; content: string; activeFilePath: string | null; activeFileId: string | null }>({
+    requestId: 0,
     content: "",
     activeFilePath: null,
+    activeFileId: null,
   })
-  const lastActiveFileIdRef = useRef<string | null>(null)
+  const lastActiveFileIdRef = useRef<string | null | undefined>(undefined)
   const contentRef = useRef<HTMLDivElement>(null)
+  const activeFileId = useEditorStore((state) => state.activeFileId)
   const activeFilePath = useEditorStore((state) => {
     if (!state.activeFileId) {
       return null
@@ -249,8 +266,8 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
   }, [renderedChunks])
 
   const enqueueChunkRender = useCallback(
-    (_requestId: number, chunks: MarkdownRenderChunk[]) => {
-      const baseFilePath = latestRenderInputRef.current.activeFilePath
+    (requestId: number, chunks: MarkdownRenderChunk[]) => {
+      const { activeFilePath: baseFilePath, activeFileId: renderFileId } = latestRenderInputRef.current
       const token = chunkRenderTokenRef.current + 1
       chunkRenderTokenRef.current = token
 
@@ -259,29 +276,30 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         chunkRenderTimerRef.current = null
       }
 
-      setRenderedChunks([])
-
-      if (chunks.length === 0) {
-        setIsRendering(false)
-        return
-      }
-
       let nextIndex = 0
+      const nextChunks: MarkdownRenderChunk[] = []
+      const nextCache = new Map<string, DisplayChunkCacheEntry>()
 
       const renderNextBatch = () => {
-        if (token !== chunkRenderTokenRef.current || _requestId !== renderRequestIdRef.current) {
+        if (token !== chunkRenderTokenRef.current || requestId !== renderRequestIdRef.current ||
+          useEditorStore.getState().activeFileId !== renderFileId) {
           return
         }
 
         const batch = chunks.slice(nextIndex, nextIndex + CHUNK_RENDER_BATCH_SIZE)
         nextIndex += batch.length
-        const displayBatch = processDisplayChunks(batch, baseFilePath)
-
-        startTransition(() => {
-          setRenderedChunks((previousChunks) => (
-            nextIndex === batch.length ? displayBatch : [...previousChunks, ...displayBatch]
-          ))
-        })
+        for (const chunk of batch) {
+          let cached = displayChunkCacheRef.current.get(chunk.key)
+          if (!cached || cached.sourceHtml !== chunk.html || cached.baseFilePath !== baseFilePath) {
+            cached = {
+              sourceHtml: chunk.html,
+              baseFilePath,
+              processedHtml: processDisplayChunks([chunk], baseFilePath)[0].html,
+            }
+          }
+          nextCache.set(chunk.key, cached)
+          nextChunks.push({ ...chunk, html: cached.processedHtml })
+        }
 
         if (nextIndex < chunks.length) {
           chunkRenderTimerRef.current = window.setTimeout(renderNextBatch, CHUNK_RENDER_FRAME_DELAY)
@@ -289,6 +307,13 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         }
 
         chunkRenderTimerRef.current = null
+        displayChunkCacheRef.current = nextCache
+        startTransition(() => {
+          setRenderedChunks((previousChunks) => (
+            token === chunkRenderTokenRef.current && requestId === renderRequestIdRef.current &&
+              useEditorStore.getState().activeFileId === renderFileId ? nextChunks : previousChunks
+          ))
+        })
         setIsRendering(false)
       }
 
@@ -297,111 +322,34 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
     [startTransition]
   )
 
-  const postRenderRequest = useCallback(
-    (renderContent: string, renderActiveFilePath: string | null) => {
-      const worker = workerRef.current
-
-      if (!worker) {
-        return false
-      }
-
-      const nextRequestId = renderRequestIdRef.current + 1
-      renderRequestIdRef.current = nextRequestId
-      cancelScheduledChunkRender()
-      setIsRendering(true)
-
-      worker.postMessage({
-        type: "render",
-        requestId: nextRequestId,
-        content: renderContent,
-        activeFilePath: renderActiveFilePath,
-      })
-
-      return true
-    },
-    [cancelScheduledChunkRender]
-  )
-
-  const scheduleRender = useCallback(
-    (renderContent: string, renderActiveFilePath: string | null) => {
-      if (renderDebounceTimerRef.current !== null) {
-        window.clearTimeout(renderDebounceTimerRef.current)
-      }
-
-      renderDebounceTimerRef.current = window.setTimeout(() => {
-        renderDebounceTimerRef.current = null
-
-        if (!postRenderRequest(renderContent, renderActiveFilePath)) {
-          const chunks = renderMarkdownToHtmlChunks(renderContent, renderActiveFilePath)
-          const resolvedChunks = processDisplayChunks(chunks, renderActiveFilePath)
-          setRenderedChunks(resolvedChunks)
-          setIsRendering(false)
-        }
-      }, 220)
-    },
-    [postRenderRequest]
-  )
-
   useEffect(() => {
-    latestRenderInputRef.current = {
-      content: deferredContent,
-      activeFilePath,
-    }
-  }, [activeFilePath, deferredContent])
-
-  // 文件切换时立即渲染，跳过延迟
-  useEffect(() => {
-    const activeFileId = useEditorStore.getState().activeFileId
-    if (activeFileId && activeFileId !== lastActiveFileIdRef.current) {
-      lastActiveFileIdRef.current = activeFileId
-      // 立即渲染，不使用 debounce
-      if (renderDebounceTimerRef.current !== null) {
-        window.clearTimeout(renderDebounceTimerRef.current)
-        renderDebounceTimerRef.current = null
-      }
-      if (!postRenderRequest(content, activeFilePath)) {
-        const chunks = renderMarkdownToHtmlChunks(content, activeFilePath)
-        const resolvedChunks = processDisplayChunks(chunks, activeFilePath)
-        setRenderedChunks(resolvedChunks)
-        setIsRendering(false)
-      }
-    }
-  }, [activeFilePath, content, postRenderRequest])
-
-  useEffect(() => {
-    if (typeof Worker === "undefined") {
-      const chunks = renderMarkdownToHtmlChunks(deferredContent, activeFilePath)
-      const resolvedChunks = processDisplayChunks(chunks, activeFilePath)
-      setRenderedChunks(resolvedChunks)
-      setIsRendering(false)
-      return
-    }
-
-    const worker = new Worker(new URL("../../workers/markdown-render-worker.ts", import.meta.url), {
+    const worker = typeof Worker === "undefined" ? null : new Worker(new URL("../../workers/markdown-render-worker.ts", import.meta.url), {
       type: "module",
     })
 
     workerRef.current = worker
 
-    worker.onmessage = (event: MessageEvent<{ type: string; requestId?: number; chunks?: MarkdownRenderChunk[] }>) => {
-      const message = event.data
+    if (worker) {
+      worker.onmessage = (event: MessageEvent<{ type: string; requestId?: number; chunks?: MarkdownRenderChunk[] }>) => {
+        const message = event.data
 
-      if (message.type === "ready") {
-        setIsWorkerReady(true)
-        return
-      }
-
-      if (message.type === "chunks" && typeof message.requestId === "number") {
-        if (message.requestId !== renderRequestIdRef.current) {
+        if (message.type === "ready") {
+          setIsWorkerReady(true)
           return
         }
 
-        enqueueChunkRender(message.requestId, message.chunks || [])
-      }
-    }
+        if (message.type === "chunks" && typeof message.requestId === "number") {
+          if (message.requestId !== renderRequestIdRef.current) {
+            return
+          }
 
-    worker.onerror = (error) => {
-      console.error("[RadishMD][markdown-render] worker error", error)
+          enqueueChunkRender(message.requestId, message.chunks || [])
+        }
+      }
+
+      worker.onerror = (error) => {
+        console.error("[RadishMD][markdown-render] worker error", error)
+      }
     }
 
     return () => {
@@ -410,27 +358,57 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
         renderDebounceTimerRef.current = null
       }
       cancelScheduledChunkRender()
+      renderRequestIdRef.current += 1
       workerRef.current = null
       setIsWorkerReady(false)
       setIsRendering(false)
-      worker.terminate()
+      lastActiveFileIdRef.current = undefined
+      worker?.terminate()
     }
   }, [cancelScheduledChunkRender, enqueueChunkRender])
 
   useEffect(() => {
-    if (typeof Worker === "undefined") {
+    if (lastActiveFileIdRef.current === activeFileId &&
+      latestRenderInputRef.current.requestId === renderRequestIdRef.current &&
+      latestRenderInputRef.current.content === content &&
+      latestRenderInputRef.current.activeFilePath === activeFilePath &&
+      (typeof Worker === "undefined" || isWorkerReady)) {
       return
     }
-
-    if (!isWorkerReady) {
-      setIsRendering(true)
-      return
+    // Invalidate old work as soon as input changes, including the debounce interval.
+    renderRequestIdRef.current += 1
+    const requestId = renderRequestIdRef.current
+    cancelScheduledChunkRender()
+    if (renderDebounceTimerRef.current !== null) {
+      window.clearTimeout(renderDebounceTimerRef.current)
+      renderDebounceTimerRef.current = null
     }
-
-    // Worker is ready, trigger render using current content
+    const fileChanged = activeFileId !== lastActiveFileIdRef.current
+    if (fileChanged) {
+      displayChunkCacheRef.current.clear()
+      setRenderedChunks([])
+      setPreviewImage(null)
+    }
     setIsRendering(true)
-    scheduleRender(deferredContent, activeFilePath)
-  }, [activeFilePath, deferredContent, isWorkerReady, scheduleRender])
+    if (typeof Worker !== "undefined" && !isWorkerReady) {
+      return
+    }
+    if (!fileChanged && deferredContent !== content) return
+
+    lastActiveFileIdRef.current = activeFileId
+    latestRenderInputRef.current = { requestId, content, activeFilePath, activeFileId }
+    const render = () => {
+      renderDebounceTimerRef.current = null
+      if (requestId !== renderRequestIdRef.current) return
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: "render", requestId, content, activeFilePath })
+      } else {
+        enqueueChunkRender(requestId, renderMarkdownToHtmlChunks(content, activeFilePath))
+      }
+    }
+    if (fileChanged) render()
+    else renderDebounceTimerRef.current = window.setTimeout(render, 220)
+  }, [activeFileId, activeFilePath, content, deferredContent, isWorkerReady, cancelScheduledChunkRender, enqueueChunkRender])
 
   const isRenderLoading = isRendering || isPending
 
@@ -496,10 +474,10 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
           </div>
         ) : null}
         {renderedChunks.map((chunk) => (
-          <div
+          <PreviewChunk
             key={chunk.key}
-            data-source-line={chunk.sourceLine}
-            dangerouslySetInnerHTML={{ __html: chunk.html }}
+            sourceLine={chunk.sourceLine}
+            html={chunk.html}
           />
         ))}
       </div>

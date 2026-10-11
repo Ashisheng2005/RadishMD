@@ -46,6 +46,10 @@ function ToolbarButton({ icon, label, shortcut, onClick }: ToolbarButtonProps) {
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-muted-foreground hover:text-foreground"
+            aria-label={label}
+            onMouseDown={(event) => {
+              if (event.button === 0) event.preventDefault()
+            }}
             onClick={onClick}
           >
             {icon}

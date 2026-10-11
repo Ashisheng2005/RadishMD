@@ -299,12 +299,14 @@ export function blocksToMarkdown(blocks: Block[]): string {
           return `###### ${block.content}`
         case "code":
           return `\`\`\`${block.language || ""}\n${block.content}\n\`\`\``
+        case "mermaid":
+          return `\`\`\`mermaid\n${block.content}\n\`\`\``
         case "quote":
-          return `> ${block.content}`
+          return block.content.split("\n").map((line) => `> ${line}`).join("\n")
         case "list":
-          return `- ${block.content}`
+          return `- ${block.content.replace(/\n/g, "\n  ")}`
         case "ordered":
-          return `1. ${block.content}`
+          return `1. ${block.content.replace(/\n/g, "\n   ")}`
         case "task":
           return `- [${block.checked ? "x" : " "}] ${block.content}`
         case "hr":
@@ -312,10 +314,17 @@ export function blocksToMarkdown(blocks: Block[]): string {
         case "table":
           return block.content
         default:
+          if (block.content.startsWith("$$MATH$$:")) {
+            return `$$\n${block.content.slice(9)}\n$$`
+          }
           return block.content
       }
     })
-    .join("\n")
+    // Keep paragraph/table boundaries. Quotes already carry their own line prefix.
+    .map((blockMarkdown, index) => (
+      index === 0 ? blockMarkdown : `${blocks[index - 1].type === "quote" ? "\n" : "\n\n"}${blockMarkdown}`
+    ))
+    .join("")
 }
 
 export function renderInlineMarkdown(text: string, baseFilePath?: string | null): string {

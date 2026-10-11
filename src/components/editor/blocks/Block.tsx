@@ -1,10 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
-import { parseTableMarkdownToHtml, renderInlineMarkdown } from "./utils"
+import { escapeHtml, parseTableMarkdownToHtml, renderInlineMarkdown } from "./utils"
 import { renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
-import type { Block } from "./types"
+import type { Block as BlockType } from "./types"
 import mermaid from "mermaid"
 
 // Module-level mermaid initialization flag (prevent re-init on every render)
@@ -20,19 +20,21 @@ function ensureMermaidWysiwygInitialized() {
 }
 
 interface BlockProps {
-  block: Block
+  block: BlockType
   isActive: boolean
-  onUpdate: (content: string) => void
-  onToggleTask?: () => void
-  onFocus?: () => void
-  onClick?: () => void
+  onUpdate: (blockId: string, content: string) => void
+  onCommit?: (blockId: string) => void
+  onToggleTask?: (blockId: string) => void
+  onFocus?: (blockId: string) => void
+  onClick?: (blockId: string) => void
   baseFilePath?: string | null
 }
 
-export function Block({
+export const Block = memo(function Block({
   block,
   isActive,
   onUpdate,
+  onCommit,
   onToggleTask,
   onFocus,
   onClick,
@@ -42,18 +44,22 @@ export function Block({
   const [isEditing, setIsEditing] = useState(false)
   // Local content state for immediate UI response
   const [localContent, setLocalContent] = useState(block.content)
-  const debounceRef = useRef<number | null>(null)
   const contentRef = useRef(block.content)
   // Mermaid rendering state
   const [mermaidSvg, setMermaidSvg] = useState<string>("")
+  const mermaidHtml = useMemo(() => ({
+    __html: mermaidSvg || `<pre class="text-muted-foreground whitespace-pre-wrap">${escapeHtml(block.content)}</pre>`,
+  }), [mermaidSvg, block.content])
+
+  useEffect(() => {
+    if (!isActive) setIsEditing(false)
+  }, [isActive])
 
   // Sync local content when block content changes externally
   useEffect(() => {
-    if (!isEditing) {
-      setLocalContent(block.content)
-      contentRef.current = block.content
-    }
-  }, [block.content, isEditing])
+    setLocalContent(block.content)
+    contentRef.current = block.content
+  }, [block.content])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -71,16 +77,6 @@ export function Block({
     }
   }, [isEditing])
 
-  // Flush pending updates on unmount
-  useEffect(() => {
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current)
-        onUpdate(contentRef.current)
-      }
-    }
-  }, [onUpdate])
-
   // Render mermaid diagram when in view mode
   useEffect(() => {
     if (block.type !== "mermaid" || isEditing) return
@@ -93,48 +89,47 @@ export function Block({
 
     ensureMermaidWysiwygInitialized()
 
-    const chartId = `mermaid-wysiwyg-${block.id}`
+    let cancelled = false
+    const chartId = `mermaid-wysiwyg-${crypto.randomUUID()}`
     setMermaidSvg(`<p class="text-muted-foreground text-sm">正在渲染流程图...</p>`)
 
     mermaid
       .render(chartId, block.content)
       .then((result) => {
-        setMermaidSvg(result.svg)
+        if (!cancelled) setMermaidSvg(result.svg)
       })
       .catch((err) => {
+        if (cancelled) return
         console.error("[RadishMD] mermaid render error:", err)
         const errorMsg = err instanceof Error ? err.message : String(err)
         setMermaidSvg(`<div class="mermaid-error p-4 rounded-lg border border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20 my-2">
   <p class="text-sm font-medium text-red-600 dark:text-red-400 mb-1">⚠️ 流程图渲染失败</p>
-  <p class="text-xs text-red-500/80 mb-2 font-mono">${errorMsg.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>
-  <pre class="text-xs text-red-500 whitespace-pre-wrap border-t border-red-200 dark:border-red-800 pt-2 mt-1">${block.content}</pre>
+  <p class="text-xs text-red-500/80 mb-2 font-mono">${escapeHtml(errorMsg)}</p>
+  <pre class="text-xs text-red-500 whitespace-pre-wrap border-t border-red-200 dark:border-red-800 pt-2 mt-1">${escapeHtml(block.content)}</pre>
 </div>`)
       })
+    return () => { cancelled = true }
   }, [block.type, block.id, block.content, isEditing])
 
   const handleFocus = useCallback(() => {
     setIsEditing(true)
-    onFocus?.()
-  }, [onFocus])
+    onFocus?.(block.id)
+  }, [block.id, onFocus])
 
   const handleBlur = useCallback(() => {
     setIsEditing(false)
-    // Flush any pending updates
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current)
-      debounceRef.current = null
-    }
     if (contentRef.current !== block.content) {
-      onUpdate(contentRef.current)
+      onUpdate(block.id, contentRef.current)
     }
-  }, [block.content, onUpdate])
+    onCommit?.(block.id)
+  }, [block.id, block.content, onUpdate, onCommit])
 
   const handleClick = useCallback(() => {
     if (!isEditing) {
       setIsEditing(true)
     }
-    onClick?.()
-  }, [isEditing, onClick])
+    onClick?.(block.id)
+  }, [block.id, isEditing, onClick])
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -144,26 +139,17 @@ export function Block({
 
       // Keep the document buffer authoritative so an immediate save cannot
       // observe a pending block-local debounce.
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current)
-        debounceRef.current = null
-      }
-      onUpdate(newValue)
+      onUpdate(block.id, newValue)
     },
-    [block.content, onUpdate]
+    [block.id, onUpdate]
   )
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Escape") {
         e.preventDefault()
-        // Flush immediately on Escape
-        if (debounceRef.current) {
-          clearTimeout(debounceRef.current)
-          debounceRef.current = null
-        }
         if (contentRef.current !== block.content) {
-          onUpdate(contentRef.current)
+          onUpdate(block.id, contentRef.current)
         }
         textareaRef.current?.blur()
         return
@@ -179,6 +165,7 @@ export function Block({
         const newValue = value.substring(0, start) + "  " + value.substring(end)
         setLocalContent(newValue)
         contentRef.current = newValue
+        onUpdate(block.id, newValue)
 
         requestAnimationFrame(() => {
           textarea.selectionStart = textarea.selectionEnd = start + 2
@@ -186,7 +173,7 @@ export function Block({
         return
       }
     },
-    [block.content, onUpdate]
+    [block.id, block.content, onUpdate]
   )
 
   // Render content based on block type
@@ -226,7 +213,7 @@ export function Block({
       return (
         <div
           className="mermaid-diagram flex justify-center p-4"
-          dangerouslySetInnerHTML={{ __html: mermaidSvg || `<pre class="text-muted-foreground whitespace-pre-wrap">${block.content}</pre>` }}
+          dangerouslySetInnerHTML={mermaidHtml}
         />
       )
     }
@@ -319,7 +306,7 @@ export function Block({
           )}
           onClick={(e) => {
             e.stopPropagation()
-            onToggleTask?.()
+            onToggleTask?.(block.id)
           }}
         >
           {block.checked && (
@@ -386,4 +373,4 @@ export function Block({
       {renderContent()}
     </div>
   )
-}
+})

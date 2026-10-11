@@ -474,9 +474,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         filePath: file.filePath,
         files: summarizeFiles(get().files),
       })
-      set({ activeFileId: id })
-
       const isPdf = file.filePath?.toLowerCase().endsWith(".pdf") ?? false
+      // Switch identity and buffer together; disk I/O must not expose the old
+      // document as an editable buffer belonging to the newly selected file.
+      const initialContent = file.content || ""
+      set({ activeFileId: id, content: initialContent, contentType: isPdf ? "pdf" : "markdown", splitViewMode: isPdf ? "render" : get().splitViewMode })
+      get().updateCounts(isPdf ? "" : initialContent)
 
       if (file.filePath) {
         try {
@@ -491,14 +494,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           if (get().activeFileId !== id) {
             return
           }
+          const currentFile = get().findNodeById(id)
+          if (!currentFile) return
+          // Saving/reloading/renaming while this read is pending makes its
+          // snapshot stale, even when the latest buffer is no longer dirty.
+          if (currentFile.filePath !== file.filePath || currentFile.sourceModified !== file.sourceModified ||
+            (!currentFile.isDirty && getEditVersion(currentFile) !== getEditVersion(file))) return
 
           const shouldLoadContent =
-            file.content === undefined ||
-            (file.content === "" && file.sourceModified == null && !file.isDirty && !file.isNew)
-          const modifiedChanged = shouldLoadContent || snapshot.modified !== file.sourceModified
+            currentFile.content === undefined ||
+            (currentFile.content === "" && currentFile.sourceModified == null && !currentFile.isDirty && !currentFile.isNew)
+          const modifiedChanged = shouldLoadContent || snapshot.modified !== currentFile.sourceModified
 
           if (modifiedChanged) {
-            if (file.isDirty) {
+            if (currentFile.isDirty) {
               debugEditorLog("setActiveFile:external-change-kept-local", {
                 id,
                 filePath: file.filePath,
@@ -506,7 +515,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 snapshotModified: snapshot.modified,
               })
 
-              warnExternalChangeOnce(file, snapshot.modified)
+              warnExternalChangeOnce(currentFile, snapshot.modified)
 
               set((state) => ({
                 files: updateFileInNodes(state.files, id, (node) => ({
@@ -515,7 +524,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
                 })),
               }))
 
-              const currentContent = file.content || ""
+              const currentContent = currentFile.content || ""
               set({ content: currentContent, contentType: "markdown" })
               get().updateCounts(currentContent)
               return
@@ -550,7 +559,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         }
       }
 
-      const currentContent = file.content || ""
+      // A rejected read or an unchanged disk snapshot may still race with edits
+      // or another file switch. Use the latest buffer only for this active file.
+      if (get().activeFileId !== id) return
+      const currentFile = get().findNodeById(id)
+      if (!currentFile) return
+      const currentContent = currentFile.content || ""
       debugEditorLog("setActiveFile:use-in-memory-content", {
         id,
         fileName: file.name,

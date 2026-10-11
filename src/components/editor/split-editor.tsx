@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useEffect, useRef, type ClipboardEvent } from "react"
+import { useCallback, useEffect, useRef, type ClipboardEvent } from "react"
 import { useEditorStore } from "@/lib/editor-store"
 import { MarkdownRenderer } from "./markdown-renderer"
 import { Toolbar, FormatType } from "./toolbar"
@@ -7,7 +7,6 @@ import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/im
 
 export function SplitEditor() {
   const { content, setContent, splitViewMode, tabSize, contentType, shouldResetScroll, setShouldResetScroll, activeFileId, saveScrollPosition, getScrollPosition } = useEditorStore()
-  const deferredContent = useDeferredValue(content) // 使用 useDeferredValue 降低渲染优先级，保持输入流畅
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const previewRef = useRef<HTMLDivElement>(null)
   const isSyncingScrollRef = useRef(false) // 标记是否正在执行滚动同步，防止循环触发
@@ -676,7 +675,7 @@ export function SplitEditor() {
                   />
                 </div>
               ) : (
-                <MarkdownRenderer content={deferredContent} />
+                <MarkdownRenderer content={content} />
               )}
             </div>
           </div>
