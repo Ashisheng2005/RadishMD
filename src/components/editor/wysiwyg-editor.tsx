@@ -9,43 +9,96 @@ import { Block } from "./blocks"
 import { parseMarkdownToBlocks, blocksToMarkdown } from "./blocks/utils"
 import type { Block as BlockType } from "./blocks/types"
 
+function updateSourceLines(blocks: BlockType[]) {
+  let sourceLine = 0
+  return blocks.map((block) => {
+    const updated = block.sourceLine === sourceLine ? block : { ...block, sourceLine }
+    sourceLine += blocksToMarkdown([block]).split("\n").length + (block.type === "quote" ? 0 : 1)
+    return updated
+  })
+}
+
 export function WysiwygEditor() {
   const { content, setContent, editMode, activeFileId, findNodeById } = useEditorStore()
   const [blocks, setBlocks] = useState<BlockType[]>(() => parseMarkdownToBlocks(content))
-  const [activeBlockId, setActiveBlockId] = useState<string | null>(null)
+  const [activeBlockId, setActiveBlockIdState] = useState<string | null>(null)
+  const activeBlockIdRef = useRef<string | null>(null)
+  const setActiveBlockId = useCallback((id: string | null) => {
+    activeBlockIdRef.current = id
+    setActiveBlockIdState(id)
+  }, [])
   const [previewImage, setPreviewImage] = useState<{ src: string; alt?: string } | null>(null)
-  const isInternalUpdate = useRef(false)
+  const blocksRef = useRef(blocks)
+  const blocksFileIdRef = useRef(activeFileId)
+  const pendingInternalUpdateRef = useRef<{ content: string; fileId: string | null } | null>(null)
   const activeFilePath = activeFileId ? findNodeById(activeFileId)?.filePath ?? null : null
   const editorRef = useRef<HTMLDivElement>(null)
 
   // Sync blocks when content changes externally
   useEffect(() => {
-    if (!isInternalUpdate.current) {
-      setBlocks(parseMarkdownToBlocks(content))
-    }
-  }, [content])
+    const pending = pendingInternalUpdateRef.current
+    pendingInternalUpdateRef.current = null
+    if (pending?.fileId === activeFileId && pending.content === content) return
+    const nextBlocks = parseMarkdownToBlocks(content)
+    blocksRef.current = nextBlocks
+    blocksFileIdRef.current = activeFileId
+    setBlocks(nextBlocks)
+    setActiveBlockId(null)
+  }, [activeFileId, content, setActiveBlockId])
 
-  // Sync blocks to content when blocks change
-  useEffect(() => {
-    if (isInternalUpdate.current) {
-      setContent(blocksToMarkdown(blocks))
-      isInternalUpdate.current = false
-    }
-  }, [blocks, setContent])
+  // Publish from the input event so an immediate save sees the latest buffer.
+  const commitBlocks = useCallback((nextBlocks: BlockType[], requiresReparse = false) => {
+    const fileId = blocksFileIdRef.current
+    if (useEditorStore.getState().activeFileId !== fileId) return
+    const nextContent = blocksToMarkdown(nextBlocks)
+    const updatedBlocks = updateSourceLines(nextBlocks)
+    const previousByLine = requiresReparse
+      ? new Map(updatedBlocks.map((block) => [block.sourceLine, block]))
+      : null
+    const displayBlocks = requiresReparse ? parseMarkdownToBlocks(nextContent).map((block) => {
+      const previous = previousByLine?.get(block.sourceLine)
+      if (previous && previous.type === block.type && previous.content === block.content &&
+        previous.language === block.language && previous.checked === block.checked) return previous
+      return { ...block, id: `block-${crypto.randomUUID()}` }
+    }) : updatedBlocks
+    blocksRef.current = displayBlocks
+    setBlocks(displayBlocks)
+    pendingInternalUpdateRef.current = { content: nextContent, fileId }
+    if (requiresReparse) setActiveBlockId(null)
+    if (nextContent !== useEditorStore.getState().content) setContent(nextContent)
+  }, [setContent, setActiveBlockId])
 
   const updateBlock = useCallback((blockId: string, newContent: string) => {
-    isInternalUpdate.current = true
-    setBlocks((prev) => prev.map((b) => (b.id === blockId ? { ...b, content: newContent } : b)))
-  }, [])
+    const previous = blocksRef.current
+    const block = previous.find((b) => b.id === blockId)
+    if (!block || block.content === newContent) return
+    commitBlocks(previous.map((b) => (b.id === blockId ? { ...b, content: newContent } : b)))
+  }, [commitBlocks])
 
   const toggleTask = useCallback((blockId: string) => {
-    isInternalUpdate.current = true
-    setBlocks((prev) =>
-      prev.map((b) =>
+    commitBlocks(
+      blocksRef.current.map((b) =>
         b.id === blockId && b.type === "task" ? { ...b, checked: !b.checked } : b
       )
     )
-  }, [])
+  }, [commitBlocks])
+
+  // Normalize structure on blur/Escape, never while the user is typing.
+  const commitBlockStructure = useCallback((blockId: string) => {
+    const block = blocksRef.current.find((b) => b.id === blockId)
+    if (!block) return
+    const parsed = parseMarkdownToBlocks(blocksToMarkdown([block]))
+    if (parsed.length !== 1 || parsed[0].type !== block.type || parsed[0].content !== block.content ||
+      parsed[0].language !== block.language || parsed[0].checked !== block.checked) {
+      commitBlocks(blocksRef.current, true)
+    }
+  }, [commitBlocks])
+
+  const activateBlock = useCallback((blockId: string) => {
+    const previousId = activeBlockIdRef.current
+    if (previousId && previousId !== blockId) commitBlockStructure(previousId)
+    if (blocksRef.current.some((block) => block.id === blockId)) setActiveBlockId(blockId)
+  }, [commitBlockStructure, setActiveBlockId])
 
   // Wrap selection with formatting markers
   const wrapSelection = useCallback(
@@ -74,7 +127,6 @@ export function WysiwygEditor() {
         newCursorPos = start + before.length
       }
 
-      isInternalUpdate.current = true
       updateBlock(activeBlockId, newContent)
 
       requestAnimationFrame(() => {
@@ -107,14 +159,15 @@ export function WysiwygEditor() {
       const actualLineEnd = lineEnd === -1 ? fullText.length : lineEnd
 
       const line = fullText.slice(lineStart, actualLineEnd)
+      const block = blocksRef.current.find((b) => b.id === activeBlockId)
+      if (!block) return
+      const existingPrefix = blocksToMarkdown([{ ...block, content: "" }]).split("\n")[0]
 
       let newLine: string
-      let cursorOffset: number
 
-      if (pattern.test(line)) {
+      if (pattern.test(line) || (lineStart === 0 && existingPrefix === prefix)) {
         // Remove prefix
         newLine = line.replace(pattern, "")
-        cursorOffset = -prefix.length
       } else {
         // Add prefix - first remove any existing prefixes
         const cleanLine = line
@@ -123,21 +176,20 @@ export function WysiwygEditor() {
           .replace(/^\d+\.\s/, "")
           .replace(/^>\s/, "")
         newLine = prefix + cleanLine
-        cursorOffset = prefix.length
       }
 
       const newContent = fullText.slice(0, lineStart) + newLine + fullText.slice(actualLineEnd)
 
-      isInternalUpdate.current = true
-      updateBlock(activeBlockId, newContent)
-
-      requestAnimationFrame(() => {
-        textarea.focus()
-        const newCursorPos = Math.max(lineStart, Math.min(cursorPos + cursorOffset, lineStart + newLine.length))
-        textarea.selectionStart = textarea.selectionEnd = newCursorPos
-      })
+      // Parse the formatted source without reapplying the previous block prefix.
+      const nextBlocks = [...blocksRef.current]
+      const idx = nextBlocks.findIndex((b) => b.id === activeBlockId)
+      nextBlocks.splice(idx, 1, ...parseMarkdownToBlocks(newContent).map((block) => ({
+        ...block,
+        id: `block-${crypto.randomUUID()}`,
+      })))
+      commitBlocks(nextBlocks, true)
     },
-    [activeBlockId, updateBlock]
+    [activeBlockId, commitBlocks]
   )
 
   // Handle format shortcuts from toolbar
@@ -191,43 +243,43 @@ export function WysiwygEditor() {
           break
         case "hr":
           // Insert HR block
-          isInternalUpdate.current = true
-          setBlocks((prev) => {
+          {
+            const prev = blocksRef.current
             const idx = prev.findIndex((b) => b.id === activeBlockId)
-            if (idx === -1) return prev
+            if (idx === -1) return
             const newBlocks = [...prev]
             newBlocks.splice(idx + 1, 0, {
-              id: `block-${Date.now()}`,
+              id: `block-${crypto.randomUUID()}`,
               sourceLine: prev[idx].sourceLine + 1,
               type: "hr",
               content: "",
             })
-            return newBlocks
-          })
+            commitBlocks(newBlocks, true)
+          }
           break
         case "tasklist":
           formatLine("- [ ] ", /^-\s\[\s\]\s/)
           break
         case "table":
           // Insert table block
-          isInternalUpdate.current = true
           const tableContent = `| Header 1 | Header 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |`
-          setBlocks((prev) => {
+          {
+            const prev = blocksRef.current
             const idx = prev.findIndex((b) => b.id === activeBlockId)
-            if (idx === -1) return prev
+            if (idx === -1) return
             const newBlocks = [...prev]
             newBlocks.splice(idx + 1, 0, {
-              id: `block-${Date.now()}`,
+              id: `block-${crypto.randomUUID()}`,
               sourceLine: prev[idx].sourceLine + 1,
-              type: "paragraph",
+              type: "table",
               content: tableContent,
             })
-            return newBlocks
-          })
+            commitBlocks(newBlocks, true)
+          }
           break
       }
     },
-    [activeBlockId, wrapSelection, formatLine]
+    [activeBlockId, wrapSelection, formatLine, commitBlocks]
   )
 
   // Expose format handler for toolbar
@@ -385,9 +437,15 @@ export function WysiwygEditor() {
         ref={editorRef}
         className="flex-1 overflow-y-auto"
         data-editor-scroll-container
+        onMouseDownCapture={(event) => {
+          const targetBlock = (event.target as HTMLElement).closest("[data-block-id]")
+          // Commit structure from the click handler, after its target is known.
+          if (event.button === 0 && activeBlockId && targetBlock &&
+            targetBlock.getAttribute("data-block-id") !== activeBlockId) event.preventDefault()
+        }}
         onClickCapture={handleRenderedContentClick}
       >
-        <div className="max-w-3xl mx-auto px-8 py-12 space-y-2">
+        <div key={activeFileId} className="max-w-3xl mx-auto px-8 py-12 space-y-2">
           {blocks.map((block) => (
             <div
               key={block.id}
@@ -399,10 +457,11 @@ export function WysiwygEditor() {
               <Block
                 block={block}
                 isActive={activeBlockId === block.id}
-                onUpdate={(content) => updateBlock(block.id, content)}
-                onToggleTask={block.type === "task" ? () => toggleTask(block.id) : undefined}
-                onFocus={() => setActiveBlockId(block.id)}
-                onClick={() => setActiveBlockId(block.id)}
+                onUpdate={updateBlock}
+                onCommit={commitBlockStructure}
+                onToggleTask={block.type === "task" ? toggleTask : undefined}
+                onFocus={activateBlock}
+                onClick={activateBlock}
                 baseFilePath={activeFilePath}
               />
             </div>

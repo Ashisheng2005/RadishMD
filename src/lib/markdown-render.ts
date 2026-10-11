@@ -397,7 +397,10 @@ export function renderMarkdownToHtmlChunks(
       const occurrence = signatureCount.get(signature) ?? 0
       signatureCount.set(signature, occurrence + 1)
 
-      let html = cache.get(signature)
+      // Mermaid IDs must be stable across line shifts and unique for repeated diagrams.
+      let html = block.type === "mermaid"
+        ? MERMAID_PLACEHOLDER(`mermaid-${signature}-${occurrence}`, block.content)
+        : cache.get(signature)
       if (html === undefined) {
         html = renderMarkdownBlockToHtml(block, activeFilePath)
         cache.set(signature, html)
