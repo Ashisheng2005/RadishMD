@@ -11,6 +11,7 @@ export interface PersistedEditorSession {
   isOutlineOpen: boolean
   editMode: "split" | "wysiwyg"
   splitViewMode: "split" | "editor" | "render"
+  openFilePaths?: string[]
 }
 
 export async function loadEditorSession(): Promise<PersistedEditorSession | null> {
@@ -45,6 +46,9 @@ export async function loadEditorSession(): Promise<PersistedEditorSession | null
       splitViewMode: parsed.splitViewMode === "editor" || parsed.splitViewMode === "render"
         ? parsed.splitViewMode
         : "split",
+      openFilePaths: Array.isArray(parsed.openFilePaths)
+        ? parsed.openFilePaths.filter((path): path is string => typeof path === "string" && path.length > 0)
+        : undefined,
     }
   } catch {
     return null

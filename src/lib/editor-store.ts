@@ -61,6 +61,7 @@ export function normalizeFilePath(filePath: string) {
 interface EditorState {
   files: FileNode[]
   activeFileId: string | null
+  openFileIds: string[]
   content: string
   isSidebarOpen: boolean
   isOutlineOpen: boolean
@@ -82,6 +83,8 @@ interface EditorState {
   saveScrollPosition: (fileId: string, editorScroll: number, previewScroll: number) => void
   getScrollPosition: (fileId: string) => { editor: number; preview: number } | null
   setActiveFile: (id: string) => Promise<void>
+  setOpenFileIds: (ids: string[]) => void
+  closeOpenFile: (id: string) => void
   setContent: (content: string) => void
   setContentType: (type: "markdown" | "pdf") => void
   openSearch: () => void
@@ -201,6 +204,24 @@ function validateNodeName(name: string) {
 
 function joinPath(parentPath: string, name: string) {
   return `${parentPath.replace(/[\\/]$/, "")}/${name}`
+}
+
+function appendOpenFileId(openFileIds: string[], id: string) {
+  return openFileIds.includes(id) ? openFileIds : [...openFileIds, id]
+}
+
+function nextOpenFileId(openFileIds: string[], removedIds: Set<string>, activeFileId: string | null) {
+  if (!activeFileId || !removedIds.has(activeFileId)) {
+    return null
+  }
+
+  const index = openFileIds.indexOf(activeFileId)
+  const right = openFileIds.slice(Math.max(index, 0) + 1).find((id) => !removedIds.has(id))
+  if (right) {
+    return right
+  }
+
+  return [...openFileIds.slice(0, Math.max(index, 0))].reverse().find((id) => !removedIds.has(id)) ?? null
 }
 
 function collectFiles(node: FileNode, result: FileNode[] = []) {
@@ -423,6 +444,7 @@ function mergeRefreshedChildren(existing: FileNode[] = [], incoming: FileNode[])
 export const useEditorStore = create<EditorState>((set, get) => ({
   files: initialFiles,
   activeFileId: null,
+  openFileIds: [],
   content: "",
   isSidebarOpen: true,
   isOutlineOpen: true,
@@ -471,7 +493,13 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       // Switch identity and buffer together; disk I/O must not expose the old
       // document as an editable buffer belonging to the newly selected file.
       const initialContent = file.content || ""
-      set({ activeFileId: id, content: initialContent, contentType: isPdf ? "pdf" : "markdown", splitViewMode: isPdf ? "render" : get().splitViewMode })
+      set({
+        activeFileId: id,
+        openFileIds: appendOpenFileId(get().openFileIds, id),
+        content: initialContent,
+        contentType: isPdf ? "pdf" : "markdown",
+        splitViewMode: isPdf ? "render" : get().splitViewMode,
+      })
       get().updateCounts(isPdf ? "" : initialContent)
 
       if (file.filePath) {
@@ -566,6 +594,34 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       set({ content: currentContent, contentType: isPdf ? "pdf" : "markdown", splitViewMode: isPdf ? "render" : get().splitViewMode })
       get().updateCounts(isPdf ? "" : currentContent)
     }
+  },
+
+  setOpenFileIds: (ids: string[]) => {
+    set({ openFileIds: ids })
+  },
+
+  closeOpenFile: (id: string) => {
+    const { openFileIds, activeFileId } = get()
+    if (!openFileIds.includes(id)) {
+      return
+    }
+
+    const removedIds = new Set([id])
+    const nextOpenFileIds = openFileIds.filter((openId) => openId !== id)
+    if (activeFileId !== id) {
+      set({ openFileIds: nextOpenFileIds })
+      return
+    }
+
+    const neighborId = nextOpenFileId(openFileIds, removedIds, activeFileId)
+    if (!neighborId) {
+      set({ openFileIds: nextOpenFileIds, activeFileId: null, content: "" })
+      get().updateCounts("")
+      return
+    }
+
+    set({ openFileIds: nextOpenFileIds })
+    void get().setActiveFile(neighborId)
   },
 
   setContent: (content: string) => {
@@ -982,6 +1038,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...(creatingType === "file" && {
           activeFileId: newNode.id,
           content: "",
+          openFileIds: appendOpenFileId(state.openFileIds, newNode.id),
         }),
       }))
     } else {
@@ -993,6 +1050,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...(creatingType === "file" && {
           activeFileId: newNode.id,
           content: "",
+          openFileIds: appendOpenFileId(state.openFileIds, newNode.id),
         }),
       }))
     }
@@ -1156,13 +1214,20 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     }
 
     const newFiles = removeFromNodes(get().files)
+    const nextOpenFileIds = get().openFileIds.filter((openId) => !removedIds.has(openId))
+    const activeRemoved = Boolean(activeFileId && removedIds.has(activeFileId))
+    const neighborId = nextOpenFileId(get().openFileIds, removedIds, activeFileId)
 
-    // If the removed node was active, clear selection
-    if (activeFileId === id || removedIds.has(activeFileId ?? "")) {
-      set({ files: newFiles, activeFileId: null, content: "" })
-      get().updateCounts("")
+    if (activeRemoved) {
+      set({ files: newFiles, openFileIds: nextOpenFileIds })
+      if (neighborId) {
+        void get().setActiveFile(neighborId)
+      } else {
+        set({ activeFileId: null, content: "" })
+        get().updateCounts("")
+      }
     } else {
-      set({ files: newFiles })
+      set({ files: newFiles, openFileIds: nextOpenFileIds })
     }
     return true
   },
@@ -1560,7 +1625,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       set((state) => ({ files: [...state.files, newFile] }))
       if (options.activate !== false) {
-        set({ activeFileId: newFile.id, content })
+        set({
+          activeFileId: newFile.id,
+          openFileIds: appendOpenFileId(get().openFileIds, newFile.id),
+          content,
+        })
         get().updateCounts(isPdf ? "" : content)
       }
 

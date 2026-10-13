@@ -1,6 +1,7 @@
 import { useEditorStore } from "@/lib/editor-store"
 import { Button } from "@/components/ui/button"
 import { Columns2, Eye, FileEdit } from "lucide-react"
+import { EditorTabs } from "./editor-tabs"
 
 export function StatusBar() {
   const {
@@ -72,12 +73,13 @@ export function StatusBar() {
 
   return (
     <footer className="h-8 bg-card border-t border-border flex items-center justify-between gap-3 px-3 text-xs text-muted-foreground">
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 shrink-0">
         <span>Markdown</span>
         <span>UTF-8</span>
         <span className="hidden sm:inline">当前：{editMode === "split" ? splitViewLabel : "WYSIWYG"}</span>
       </div>
-      <div className="flex items-center gap-3">
+      <EditorTabs />
+      <div className="flex items-center gap-3 shrink-0">
         {activeFile?.hasExternalChanges && (
           <div className="flex items-center gap-1">
             <Button

@@ -132,6 +132,9 @@ export function Editor() {
       isOutlineOpen: state.isOutlineOpen,
       editMode: state.editMode,
       splitViewMode: state.splitViewMode,
+      openFilePaths: state.openFileIds
+        .map((id) => state.findNodeById(id)?.filePath)
+        .filter((path): path is string => Boolean(path)),
     }
   }
 
@@ -243,7 +246,8 @@ export function Editor() {
     state.isSidebarOpen !== previous.isSidebarOpen ||
     state.isOutlineOpen !== previous.isOutlineOpen ||
     state.editMode !== previous.editMode ||
-    state.splitViewMode !== previous.splitViewMode
+    state.splitViewMode !== previous.splitViewMode ||
+    state.openFileIds !== previous.openFileIds
 
   const openFilePathOnce = (filePath: string) => {
     const normalizedFilePath = normalizeFilePath(filePath)
@@ -580,6 +584,21 @@ export function Editor() {
         }
         useEditorStore.setState({ fileScrollPositions: restoredScrollPositions })
 
+        if (session.openFilePaths) {
+          const restoredOpenIds: string[] = []
+          for (const path of session.openFilePaths) {
+            try {
+              const node = await ensureTreeNodeByPath(path)
+              if (node?.type === "file" && !restoredOpenIds.includes(node.id)) {
+                restoredOpenIds.push(node.id)
+              }
+            } catch (error) {
+              console.warn("[RadishMD][session] failed to restore open file", path, error)
+            }
+          }
+          useEditorStore.getState().setOpenFileIds(restoredOpenIds)
+        }
+
         if (startupOpenPaths.length > 0) {
           for (const path of startupOpenPaths) {
             handledOpenedFilePathsRef.current.add(path)
@@ -589,6 +608,11 @@ export function Editor() {
           const activeFile = await ensureTreeNodeByPath(session.activeFilePath)
           if (activeFile?.type === "file") {
             await useEditorStore.getState().setActiveFile(activeFile.id)
+          }
+        } else if (!startupExternalOpenRef.current) {
+          const firstOpenId = useEditorStore.getState().openFileIds[0]
+          if (firstOpenId) {
+            await useEditorStore.getState().setActiveFile(firstOpenId)
           }
         }
       } catch (error) {
