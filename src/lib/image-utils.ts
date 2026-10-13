@@ -70,7 +70,9 @@ export function parseImageReference(value: string, requireExclamation = false): 
   const trimmed = value.trim()
   if (!trimmed) return null
 
-  const markdownPattern = requireExclamation ? /^!\[([^\]]*)\]\(([^)]+)\)$/ : /^!?\[([^\]]*)\]\(([^)]+)\)$/
+  const markdownPattern = requireExclamation
+    ? /^!\[([^\]]*)\]\((<[^>\n]*>|[^)]+)\)$/
+    : /^!?\[([^\]]*)\]\((<[^>\n]*>|[^)]+)\)$/
   const markdownMatch = trimmed.match(markdownPattern)
   if (markdownMatch?.[2]) {
     // If requireExclamation is true, only match if ! is present
@@ -79,7 +81,7 @@ export function parseImageReference(value: string, requireExclamation = false): 
     }
     return {
       alt: markdownMatch[1] || "图片",
-      src: markdownMatch[2],
+      src: unwrapImageSource(markdownMatch[2]),
     }
   }
 
@@ -118,37 +120,174 @@ export function isStandaloneImageReference(value: string) {
   return parseImageReference(value) !== null
 }
 
-// Resolve local image paths to Tauri asset URLs
-export function resolveImageSource(source: string, baseFilePath?: string | null): string {
-  // Already an absolute URL, data URI, or asset URL - return as-is
-  if (
+function unwrapImageSource(source: string) {
+  let value = source.trim()
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const wrappedInQuotes = (value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))
+    const wrappedInBrackets = value.startsWith("<") && value.endsWith(">")
+    if ((!wrappedInQuotes && !wrappedInBrackets) || value.length < 2) {
+      break
+    }
+
+    value = value.slice(1, -1).trim()
+  }
+
+  return value
+}
+
+function isWebSource(source: string) {
+  return (
     source.startsWith("data:") ||
     source.startsWith("asset://") ||
     source.startsWith("http://") ||
     source.startsWith("https://") ||
-    source.startsWith("file://")
-  ) {
+    source.startsWith("//")
+  )
+}
+
+function isWindowsRuntime() {
+  return typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent)
+}
+
+function isAbsoluteLocalPath(filePath: string) {
+  if (/^[A-Za-z]:[\\/]/.test(filePath) || filePath.startsWith("\\\\")) {
+    return true
+  }
+
+  return !isWindowsRuntime() && filePath.startsWith("/")
+}
+
+function directoryOf(filePath: string) {
+  const normalized = filePath.replace(/\\/g, "/")
+  const separatorIndex = normalized.lastIndexOf("/")
+  if (separatorIndex < 0) {
+    return ""
+  }
+
+  return normalized.slice(0, separatorIndex)
+}
+
+function joinLocalPath(baseDir: string, relativePath: string) {
+  const base = baseDir.replace(/[\\/]+$/, "")
+  const relative = relativePath.replace(/^[\\/]+/, "")
+  if (!base) {
+    return relative
+  }
+
+  return `${base}/${relative}`
+}
+
+function normalizeLocalPath(filePath: string) {
+  const unified = filePath.replace(/\\/g, "/")
+  const unc = unified.startsWith("//")
+  const driveMatch = unified.match(/^([A-Za-z]:)(?:\/|$)/)
+  const rooted = unc || Boolean(driveMatch) || unified.startsWith("/")
+  const stack: string[] = []
+
+  for (const segment of unified.split("/")) {
+    if (!segment || segment === ".") {
+      continue
+    }
+
+    const top = stack[stack.length - 1]
+    const topIsDrive = Boolean(top && /^[A-Za-z]:$/.test(top))
+    if (segment === "..") {
+      if (stack.length > 0 && !topIsDrive && top !== "..") {
+        stack.pop()
+      } else if (!rooted) {
+        stack.push("..")
+      }
+      continue
+    }
+
+    stack.push(segment)
+  }
+
+  if (driveMatch) {
+    const rest = stack[0] && /^[A-Za-z]:$/.test(stack[0]) ? stack.slice(1) : stack
+    return `${driveMatch[1]}/${rest.join("/")}`
+  }
+
+  if (unc) {
+    return `//${stack.join("/")}`
+  }
+
+  if (unified.startsWith("/")) {
+    return `/${stack.join("/")}`
+  }
+
+  return stack.join("/")
+}
+
+// Turn a markdown image source into a local filesystem path.
+// Remote URLs and relative paths without a saved document stay unresolved.
+function toLocalImagePath(source: string, baseFilePath?: string | null) {
+  let path = unwrapImageSource(source)
+  if (!path || isWebSource(path)) {
+    return null
+  }
+
+  if (path.startsWith("file://")) {
+    path = normalizeFilePath(path)
+  }
+
+  if (!path || isWebSource(path)) {
+    return null
+  }
+
+  if (!isAbsoluteLocalPath(path)) {
+    if (!baseFilePath) {
+      return null
+    }
+
+    const baseDir = directoryOf(baseFilePath)
+    if (!baseDir) {
+      return null
+    }
+
+    path = joinLocalPath(baseDir, path)
+  }
+
+  return normalizeLocalPath(path) || null
+}
+
+function toWebviewAssetUrl(filePath: string) {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) {
+    return filePath
+  }
+
+  try {
+    return convertFileSrc(filePath)
+  } catch {
+    return filePath
+  }
+}
+
+// Resolve local image paths to Tauri asset URLs.
+// Windows absolute paths such as C:\...\a.png must not be joined onto the markdown directory.
+export function resolveImageSource(source: string, baseFilePath?: string | null): string {
+  const prepared = unwrapImageSource(source)
+  if (!prepared) {
     return source
   }
 
-  // Relative path - convert to asset URL using baseFilePath
-  if (baseFilePath) {
-    // Calculate the directory of the base file
-    const lastSlash = Math.max(baseFilePath.lastIndexOf("/"), baseFilePath.lastIndexOf("\\"))
-    const baseDir = lastSlash > 0 ? baseFilePath.substring(0, lastSlash) : ""
-    // Combine with source to get absolute path
-    const absolutePath = baseDir ? `${baseDir}/${source}` : source
-    const normalizedPath = normalizeFilePath(absolutePath)
-    return convertFileSrc(normalizedPath)
+  if (isWebSource(prepared)) {
+    return prepared
   }
 
-  // No baseFilePath - return original source
-  return source
+  const localPath = toLocalImagePath(prepared, baseFilePath)
+  if (!localPath) {
+    return prepared
+  }
+
+  return toWebviewAssetUrl(localPath)
 }
 
 export function getImageAltFromSource(source: string) {
-  const resolvedSource = resolveImageSource(source)
-  const cleanedSource = resolvedSource.split(/[?#]/)[0]
+  const prepared = unwrapImageSource(source)
+  const localPath = toLocalImagePath(prepared) ?? prepared
+  const cleanedSource = localPath.split(/[?#]/)[0]
   const fileName = cleanedSource.split(/[\\/]/).pop()?.trim()
   if (!fileName) {
     return "图片"

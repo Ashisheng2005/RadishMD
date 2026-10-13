@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { invoke, convertFileSrc } from "@tauri-apps/api/core"
 import { save } from "@tauri-apps/plugin-dialog"
 import { toast } from "sonner"
+import { readSettingsCache, type AppTabSize, type AppTheme } from "./app-settings"
 import { invalidateDirectoryCache } from "./directory-cache"
 
 export interface FileNode {
@@ -30,20 +31,7 @@ interface FileSnapshot {
   modified: number | null
 }
 
-const TAB_SIZE_STORAGE_KEY = "radishmd.tabSize"
-
-function getInitialTabSize(): 4 | 6 | 8 {
-  if (typeof window === "undefined") {
-    return 4
-  }
-
-  const storedValue = window.localStorage.getItem(TAB_SIZE_STORAGE_KEY)
-  if (storedValue === "6" || storedValue === "8") {
-    return Number.parseInt(storedValue, 10) as 6 | 8
-  }
-
-  return 4
-}
+const initialSettings = readSettingsCache()
 
 export function normalizeFilePath(filePath: string) {
   const trimmedPath = filePath.trim()
@@ -77,11 +65,12 @@ interface EditorState {
   isSidebarOpen: boolean
   isOutlineOpen: boolean
   isSearchOpen: boolean
-  theme: "light" | "dark" | "system"
+  theme: AppTheme
   editMode: "split" | "wysiwyg"
   splitViewMode: "split" | "editor" | "render"
   contentType: "markdown" | "pdf"
-  tabSize: 4 | 6 | 8
+  tabSize: AppTabSize
+  pasteClipboardUrlOnLink: boolean
   wordCount: number
   charCount: number
   creatingType: "file" | "folder" | null
@@ -101,10 +90,13 @@ interface EditorState {
   toggleSidebar: () => void
   toggleOutline: () => void
   toggleTheme: () => void
+  setTheme: (theme: AppTheme) => void
   toggleEditMode: () => void
   setEditMode: (mode: "split" | "wysiwyg") => void
   setSplitViewMode: (mode: "split" | "editor" | "render") => void
   cycleTabSize: () => void
+  setTabSize: (tabSize: AppTabSize) => void
+  setPasteClipboardUrlOnLink: (enabled: boolean) => void
   toggleFolder: (id: string) => void
   updateCounts: (content: string) => void
   addFiles: (files: FileNode[]) => void
@@ -435,11 +427,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   isSidebarOpen: true,
   isOutlineOpen: true,
   isSearchOpen: false,
-  theme: "system",
+  theme: initialSettings.theme,
   editMode: "split",
   splitViewMode: "split",
   contentType: "markdown",
-  tabSize: getInitialTabSize(),
+  tabSize: initialSettings.tabSize,
+  pasteClipboardUrlOnLink: initialSettings.pasteClipboardUrlOnLink,
   wordCount: 0,
   charCount: 0,
   creatingType: null,
@@ -607,6 +600,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             ? "dark"
             : "system",
     })),
+  setTheme: (theme: AppTheme) => set({ theme }),
   toggleEditMode: () =>
     set((state) => ({ editMode: state.editMode === "split" ? "wysiwyg" : "split" })),
 
@@ -618,6 +612,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     set((state) => ({
       tabSize: state.tabSize === 4 ? 6 : state.tabSize === 6 ? 8 : 4,
     })),
+  setTabSize: (tabSize: AppTabSize) => set({ tabSize }),
+  setPasteClipboardUrlOnLink: (enabled: boolean) => set({ pasteClipboardUrlOnLink: enabled }),
 
   toggleFolder: (id: string) => {
     const toggleInNodes = (nodes: FileNode[]): FileNode[] => {
@@ -1638,12 +1634,4 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 }))
 
-if (typeof window !== "undefined") {
-  useEditorStore.subscribe((state, previousState) => {
-    if (state.tabSize === previousState.tabSize) {
-      return
-    }
 
-    window.localStorage.setItem(TAB_SIZE_STORAGE_KEY, String(state.tabSize))
-  })
-}

@@ -32,10 +32,6 @@ function decodeHtmlEntities(text: string): string {
 
 // Resolve image paths in HTML chunks on the main thread (worker can't use convertFileSrc)
 function resolveImagePathsInHtml(chunks: MarkdownRenderChunk[], baseFilePath: string | null): MarkdownRenderChunk[] {
-  if (!baseFilePath) {
-    return chunks
-  }
-
   return chunks.map((chunk) => {
     // Replace image src attributes with resolved asset URLs
     const resolvedHtml = chunk.html.replace(

@@ -303,7 +303,7 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   }
 
   result = result.replace(
-    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    /!\[([^\]]*)\]\((&lt;[\s\S]*?&gt;|[^)]+)\)/g,
     (_match, alt, src) => buildImageTag(decodeUrl(src), alt || "图片", baseFilePath)
   )
 
@@ -311,7 +311,10 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   result = renderMarkdownEmphasis(result)
   // Inline math $...$
   result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => MATH_INLINE_PLACEHOLDER(formula))
-  result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>')
+  result = result.replace(/\[([^\]]+)\]\((&lt;[\s\S]*?&gt;|[^)]+)\)/g, (_match, label, href) => {
+    const destination = href.startsWith("&lt;") && href.endsWith("&gt;") ? href.slice(4, -4) : href
+    return `<a href="${destination}" class="text-primary underline underline-offset-2 cursor-pointer">${label}</a>`
+  })
   result = result.replace(/\x00CODE:(\d+)\x00/g, (_match, index) => codePlaceholders[Number(index)] ?? "")
 
   return result

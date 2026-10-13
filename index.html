@@ -13,8 +13,12 @@
       ;(function () {
         try {
           var stored = localStorage.getItem('radishmd.theme')
-          var theme = stored ? JSON.parse(stored).state?.theme : 'system'
-          if (!theme) theme = 'system'
+          var theme = stored
+          if (stored && stored.charAt(0) === '{') {
+            var parsed = JSON.parse(stored)
+            theme = parsed.state && parsed.state.theme
+          }
+          if (theme !== 'light' && theme !== 'dark' && theme !== 'system') theme = 'system'
           var isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
           if (isDark) document.documentElement.classList.add('dark')
         } catch (e) {

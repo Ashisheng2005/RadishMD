@@ -8,6 +8,15 @@ import { Toolbar, type FormatType } from "./toolbar"
 import { Block } from "./blocks"
 import { parseMarkdownToBlocks, blocksToMarkdown } from "./blocks/utils"
 import type { Block as BlockType } from "./blocks/types"
+import {
+  applyTextInsertion,
+  buildImageMarkdown,
+  buildLinkMarkdown,
+  pickImageFile,
+  readClipboardText,
+  toDocumentImagePath,
+  type MarkdownInsertion,
+} from "@/lib/markdown-insert"
 
 function updateSourceLines(blocks: BlockType[]) {
   let sourceLine = 0
@@ -192,9 +201,105 @@ export function WysiwygEditor() {
     [activeBlockId, commitBlocks]
   )
 
+  const captureActiveSelection = useCallback(() => {
+    const blockId = activeBlockIdRef.current
+    if (!blockId) return null
+
+    const textarea = editorRef.current?.querySelector(
+      `[data-block-id="${blockId}"] textarea`,
+    ) as HTMLTextAreaElement | null
+    if (!textarea) return null
+
+    return {
+      blockId,
+      value: textarea.value,
+      start: textarea.selectionStart,
+      end: textarea.selectionEnd,
+    }
+  }, [])
+
+  const insertCapturedMarkdown = useCallback((
+    captured: { blockId: string; value: string; start: number; end: number },
+    insertion: MarkdownInsertion,
+  ) => {
+    const applied = applyTextInsertion(captured.value, captured.start, captured.end, insertion)
+    const currentBlocks = blocksRef.current
+    const match = currentBlocks.find((block) => block.id === captured.blockId)
+      ?? currentBlocks.find((block) => block.content === captured.value)
+    if (!match) return
+
+    updateBlock(match.id, applied.value)
+    requestAnimationFrame(() => {
+      const textarea = editorRef.current?.querySelector(
+        `[data-block-id="${match.id}"] textarea`,
+      ) as HTMLTextAreaElement | null
+      textarea?.focus()
+      textarea?.setSelectionRange(applied.selectionStart, applied.selectionEnd)
+    })
+  }, [updateBlock])
+
+  const insertLink = useCallback(() => {
+    const captured = captureActiveSelection()
+    if (!captured) return
+
+    const fileId = useEditorStore.getState().activeFileId
+    void (async () => {
+      const href = useEditorStore.getState().pasteClipboardUrlOnLink
+        ? await readClipboardText()
+        : null
+      if (useEditorStore.getState().activeFileId !== fileId) return
+      insertCapturedMarkdown(captured, buildLinkMarkdown(captured.value.slice(captured.start, captured.end), href))
+    })()
+  }, [captureActiveSelection, insertCapturedMarkdown])
+
+  const insertImage = useCallback(() => {
+    const captured = captureActiveSelection()
+    const state = useEditorStore.getState()
+    const fileId = state.activeFileId
+    const documentPath = fileId ? state.findNodeById(fileId)?.filePath ?? null : null
+
+    void (async () => {
+      const picked = await pickImageFile()
+      if (useEditorStore.getState().activeFileId !== fileId) return
+      if (picked.status === "cancelled") return
+
+      const source = picked.status === "selected" ? toDocumentImagePath(picked.path, documentPath) : null
+      if (captured) {
+        insertCapturedMarkdown(
+          captured,
+          buildImageMarkdown(captured.value.slice(captured.start, captured.end), source),
+        )
+        return
+      }
+
+      if (!source) return
+
+      const markdown = buildImageMarkdown("", source).text
+      const blocks = blocksRef.current
+      const index = blocks.findIndex((block) => block.id === activeBlockIdRef.current)
+      const nextBlocks = [...blocks]
+      nextBlocks.splice(index >= 0 ? index + 1 : nextBlocks.length, 0, {
+        id: `block-${crypto.randomUUID()}`,
+        sourceLine: index >= 0 ? index + 1 : nextBlocks.length,
+        type: "paragraph",
+        content: markdown,
+      })
+      commitBlocks(nextBlocks, true)
+    })()
+  }, [captureActiveSelection, commitBlocks, insertCapturedMarkdown])
+
   // Handle format shortcuts from toolbar
   const handleFormatShortcut = useCallback(
     (formatType: FormatType) => {
+      if (formatType === "link") {
+        insertLink()
+        return
+      }
+      if (formatType === "image") {
+        insertImage()
+        return
+      }
+
       switch (formatType) {
         case "bold":
           wrapSelection("**", "**")
@@ -207,12 +312,6 @@ export function WysiwygEditor() {
           break
         case "code":
           wrapSelection("`", "`")
-          break
-        case "link":
-          wrapSelection("[", "](url)")
-          break
-        case "image":
-          wrapSelection("![", "](url)")
           break
         case "list":
           formatLine("- ", /^-\s/)
@@ -279,7 +378,7 @@ export function WysiwygEditor() {
           break
       }
     },
-    [activeBlockId, wrapSelection, formatLine, commitBlocks]
+    [activeBlockId, wrapSelection, formatLine, commitBlocks, insertLink, insertImage]
   )
 
   // Expose format handler for toolbar

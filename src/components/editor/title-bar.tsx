@@ -25,6 +25,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { cn } from "@/lib/utils"
+import { SettingsDialog } from "./settings-dialog"
 
 interface TitleBarProps {
   checkingForUpdate: boolean
@@ -313,14 +314,6 @@ export function TitleBar({
   }, [selectedIndex])
 
   const displayLabel = activeFile?.filePath || activeFile?.name || "RadishMD"
-  const updateStatusText =
-    updateCheckState === "checking"
-      ? "检查中"
-      : updateCheckState === "update-available"
-        ? `发现新版本 ${latestVersion ?? ""}`.trim()
-        : updateCheckState === "up-to-date"
-          ? "当前已是最新版本"
-          : "检查更新"
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -607,62 +600,31 @@ export function TitleBar({
           </Tooltip>
         </TooltipProvider>
 
-        <Popover open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-          <TooltipProvider delayDuration={300}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7">
-                    <SlidersHorizontal className="h-4 w-4" />
-                  </Button>
-                </PopoverTrigger>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                设置
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <PopoverContent align="end" side="bottom" sideOffset={8} className="w-72 p-0">
-            <div className="space-y-4 p-4">
-              <div>
-                <div className="text-sm font-medium text-foreground">设置</div>
-                <div className="mt-1 text-xs text-muted-foreground">更新检查、版本信息和应用偏好都放在这里。</div>
-              </div>
-
-              <div className="rounded-lg border bg-muted/20 p-3">
-                <div className="text-xs text-muted-foreground">版本状态</div>
-                <div className="mt-1 text-sm font-medium text-foreground">
-                  {updateStatusText}
-                </div>
-              </div>
-
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
               <Button
-                type="button"
-                className={cn(
-                  "w-full justify-start transition-all",
-                  checkingForUpdate && "border-primary/40 bg-primary/10 text-primary shadow-sm"
-                )}
-                onClick={() => {
-                  onCheckForUpdates()
-                }}
-                disabled={checkingForUpdate}
-                aria-busy={checkingForUpdate}
-                aria-live="polite"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setIsSettingsOpen((open) => !open)}
               >
-                <span className="inline-flex items-center gap-1">
-                  <span>{updateStatusText}</span>
-                  {checkingForUpdate && (
-                    <span className="inline-flex items-center gap-0.5 text-primary" aria-hidden="true">
-                      <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.2s]" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.1s]" />
-                      <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce" />
-                    </span>
-                  )}
-                </span>
+                <SlidersHorizontal className="h-4 w-4" />
               </Button>
-            </div>
-          </PopoverContent>
-        </Popover>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              设置
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <SettingsDialog
+          open={isSettingsOpen}
+          onOpenChange={setIsSettingsOpen}
+          checkingForUpdate={checkingForUpdate}
+          latestVersion={latestVersion}
+          updateCheckState={updateCheckState}
+          onCheckForUpdates={onCheckForUpdates}
+        />
       </div>
     </header>
   )

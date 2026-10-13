@@ -4,6 +4,14 @@ import { MarkdownRenderer } from "./markdown-renderer"
 import { Toolbar, FormatType } from "./toolbar"
 import { cn } from "@/lib/utils"
 import { extractImageSourceFromClipboard, getImageAltFromSource } from "@/lib/image-utils"
+import {
+  applyTextInsertion,
+  buildImageMarkdown,
+  buildLinkMarkdown,
+  pickImageFile,
+  readClipboardText,
+  toDocumentImagePath,
+} from "@/lib/markdown-insert"
 
 export function SplitEditor() {
   const { content, setContent, splitViewMode, tabSize, contentType, shouldResetScroll, setShouldResetScroll, activeFileId, saveScrollPosition, getScrollPosition } = useEditorStore()
@@ -330,6 +338,25 @@ export function SplitEditor() {
     })
   }, [setContent])
 
+  const applyInsertion = useCallback((
+    insertion: ReturnType<typeof buildLinkMarkdown>,
+    range?: { value: string; start: number; end: number },
+  ) => {
+    const textarea = textareaRef.current
+    if (!textarea) return
+
+    const start = range?.start ?? textarea.selectionStart
+    const end = range?.end ?? textarea.selectionEnd
+    const value = range?.value ?? textarea.value
+    const applied = applyTextInsertion(value, start, end, insertion)
+    setContent(applied.value)
+
+    requestAnimationFrame(() => {
+      textarea.focus()
+      textarea.setSelectionRange(applied.selectionStart, applied.selectionEnd)
+    })
+  }, [setContent])
+
   // 处理粘贴事件，自动识别图片和 HTML 图源并转为 Markdown 语法
   const handleTextareaPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     const html = event.clipboardData.getData("text/html")
@@ -473,12 +500,48 @@ export function SplitEditor() {
       case "code":
         wrapTextareaSelection("`", "`")
         break
-      case "link":
-        insertTextAtCursor("[](url)", "链接文本")
+      case "link": {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        const start = textarea.selectionStart
+        const end = textarea.selectionEnd
+        const selected = textarea.value.slice(start, end)
+        const value = textarea.value
+        const fileId = useEditorStore.getState().activeFileId
+        void (async () => {
+          const href = useEditorStore.getState().pasteClipboardUrlOnLink
+            ? await readClipboardText()
+            : null
+          if (useEditorStore.getState().activeFileId !== fileId) return
+          applyInsertion(buildLinkMarkdown(selected, href), { value, start, end })
+        })()
         break
-      case "image":
-        insertTextAtCursor("![](url)", "图片描述")
+      }
+      case "image": {
+        const textarea = textareaRef.current
+        if (!textarea) return
+        const start = textarea.selectionStart
+        const end = textarea.selectionEnd
+        const selected = textarea.value.slice(start, end)
+        const value = textarea.value
+        const state = useEditorStore.getState()
+        const fileId = state.activeFileId
+        const documentPath = fileId ? state.findNodeById(fileId)?.filePath ?? null : null
+        void (async () => {
+          const picked = await pickImageFile()
+          if (useEditorStore.getState().activeFileId !== fileId) return
+          if (picked.status === "cancelled") return
+          if (picked.status === "unavailable") {
+            applyInsertion(buildImageMarkdown(selected, null), { value, start, end })
+            return
+          }
+          applyInsertion(
+            buildImageMarkdown(selected, toDocumentImagePath(picked.path, documentPath)),
+            { value, start, end },
+          )
+        })()
         break
+      }
       case "list":
         formatTextareaLine("- ", /^-\s/)
         break
@@ -532,7 +595,7 @@ export function SplitEditor() {
         break
       }
     }
-  }, [wrapTextareaSelection, formatTextareaLine, insertTextAtCursor, setContent])
+  }, [wrapTextareaSelection, formatTextareaLine, insertTextAtCursor, applyInsertion, setContent])
 
   // 注册分栏模式与全局快捷键 (例如加粗/标题/引用等 Ctrl/Cmd + ...)
   useEffect(() => {

@@ -383,7 +383,7 @@ export function renderInlineMarkdown(text: string, baseFilePath?: string | null)
 
   // Images (markdown style) - resolve local image paths to asset URLs
   result = result.replace(
-    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    /!\[([^\]]*)\]\((<[^>\n]*>|[^)]+)\)/g,
     (_match, alt, src) => {
       const resolvedSrc = resolveImageSource(src, baseFilePath)
       return `<img src="${escapeHtml(resolvedSrc)}" alt="${escapeHtml(alt || "图片")}" class="max-w-full rounded-md my-2" />`
@@ -392,8 +392,11 @@ export function renderInlineMarkdown(text: string, baseFilePath?: string | null)
 
   // Links
   result = result.replace(
-    /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" class="text-primary underline underline-offset-2 cursor-pointer">$1</a>'
+    /\[([^\]]+)\]\((<[^>\n]*>|[^)]+)\)/g,
+    (_match, label, href) => {
+      const destination = href.startsWith("<") && href.endsWith(">") ? href.slice(1, -1) : href
+      return `<a href="${escapeHtml(destination)}" class="text-primary underline underline-offset-2 cursor-pointer">${label}</a>`
+    }
   )
   result = result.replace(/\x00CODE:(\d+)\x00/g, (_match, index) => codePlaceholders[Number(index)] ?? "")
 

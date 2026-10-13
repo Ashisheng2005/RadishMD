@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, LazyLock, Mutex,
@@ -17,6 +17,10 @@ use tauri_plugin_cli::CliExt;
 const GITHUB_OWNER: &str = "Ashisheng2005";
 const GITHUB_REPO: &str = "RadishMD";
 const UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "radishmd://update-download-progress";
+/// Relative directory created under the software directory (the folder that contains the executable).
+const RELATIVE_STORAGE_DIR: &str = "data";
+const SESSION_FILE_NAME: &str = "session.json";
+const SETTINGS_FILE_NAME: &str = "settings.json";
 
 #[derive(Deserialize)]
 struct GitHubReleaseAsset {
@@ -415,29 +419,83 @@ fn take_opened_files() -> Vec<String> {
     }
 }
 
-#[tauri::command]
-fn load_editor_session(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let session_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("session.json");
+fn software_directory() -> Result<PathBuf, String> {
+    std::env::current_exe()
+        .map_err(|error| error.to_string())?
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "无法定位软件目录".to_string())
+}
 
-    match fs::read_to_string(session_path) {
+fn relative_storage_path(file_name: &str) -> Result<PathBuf, String> {
+    let relative_dir = PathBuf::from(RELATIVE_STORAGE_DIR);
+    let directory = software_directory()?.join(relative_dir);
+    fs::create_dir_all(&directory).map_err(|error| {
+        format!(
+            "无法在软件目录创建相对目录 {}: {}",
+            directory.display(),
+            error
+        )
+    })?;
+    Ok(directory.join(file_name))
+}
+
+fn read_optional_text(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
         Ok(content) => Ok(Some(content)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }
 
+fn load_storage_file(app: &tauri::AppHandle, file_name: &str) -> Result<Option<String>, String> {
+    let path = relative_storage_path(file_name)?;
+    if let Some(content) = read_optional_text(&path)? {
+        return Ok(Some(content));
+    }
+
+    let Ok(legacy_dir) = app.path().app_data_dir() else {
+        return Ok(None);
+    };
+    let legacy_path = legacy_dir.join(file_name);
+    let Some(legacy) = read_optional_text(&legacy_path)? else {
+        return Ok(None);
+    };
+
+    match atomic_write_text(&path, &legacy) {
+        Ok(()) => eprintln!(
+            "[RadishMD][storage] migrated {file_name} into software directory {}",
+            path.display()
+        ),
+        Err(error) => eprintln!(
+            "[RadishMD][storage] failed to migrate {file_name} into software directory: {error}"
+        ),
+    }
+    Ok(Some(legacy))
+}
+
+fn save_storage_file(file_name: &str, content: &str) -> Result<(), String> {
+    atomic_write_text(&relative_storage_path(file_name)?, content)
+}
+
 #[tauri::command]
-fn save_editor_session(app: tauri::AppHandle, content: String) -> Result<(), String> {
-    let session_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("session.json");
-    atomic_write_text(&session_path, &content)
+fn load_editor_session(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    load_storage_file(&app, SESSION_FILE_NAME)
+}
+
+#[tauri::command]
+fn save_editor_session(_app: tauri::AppHandle, content: String) -> Result<(), String> {
+    save_storage_file(SESSION_FILE_NAME, &content)
+}
+
+#[tauri::command]
+fn load_app_settings(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    load_storage_file(&app, SETTINGS_FILE_NAME)
+}
+
+#[tauri::command]
+fn save_app_settings(_app: tauri::AppHandle, content: String) -> Result<(), String> {
+    save_storage_file(SETTINGS_FILE_NAME, &content)
 }
 
 fn normalize_version(version: &str) -> String {
@@ -922,6 +980,8 @@ pub fn run() {
             take_opened_files,
             load_editor_session,
             save_editor_session,
+            load_app_settings,
+            save_app_settings,
             get_app_version,
             check_latest_release,
             download_release_asset,

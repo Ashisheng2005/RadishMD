@@ -15,6 +15,7 @@ import { CloseConfirmDialog } from "./close-confirm-dialog"
 import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
 import { ensureTreeNodeByPath, openExternalPath, restoreExpandedFolders } from "@/lib/file-operations"
 import { loadEditorSession, saveEditorSession, type PersistedEditorSession } from "@/lib/editor-session"
+import { loadAppSettings, saveAppSettings, serializeAppSettings, type AppSettings } from "@/lib/app-settings"
 import {
   checkLatestRelease,
   cancelDownload,
@@ -54,6 +55,10 @@ export function Editor() {
   const startupExternalOpenRef = useRef(false)
   const sessionSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSessionJsonRef = useRef<string | null>(null)
+  const settingsHydratedRef = useRef(false)
+  const settingsTouchedRef = useRef(false)
+  const settingsSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastSettingsJsonRef = useRef<string | null>(null)
   const CHECK_UPDATE_MIN_LOADING_MS = 800
   const updateCheckState = checkingForUpdate
     ? "checking"
@@ -171,6 +176,74 @@ export function Editor() {
     }
     await persistEditorSession()
   }
+
+  const currentSettings = (): AppSettings => {
+    const state = useEditorStore.getState()
+    return {
+      version: 1,
+      theme: state.theme,
+      tabSize: state.tabSize,
+      pasteClipboardUrlOnLink: state.pasteClipboardUrlOnLink,
+    }
+  }
+
+  const persistAppSettings = async () => {
+    if (!settingsHydratedRef.current) {
+      return
+    }
+
+    const settings = currentSettings()
+    const serialized = serializeAppSettings(settings)
+    if (serialized === lastSettingsJsonRef.current) {
+      return
+    }
+
+    try {
+      await saveAppSettings(settings)
+      lastSettingsJsonRef.current = serialized
+    } catch (error) {
+      console.warn("[RadishMD][settings] save failed", error)
+    }
+  }
+
+  const scheduleSettingsSave = () => {
+    if (!settingsHydratedRef.current) {
+      return
+    }
+
+    if (settingsSaveTimerRef.current) {
+      clearTimeout(settingsSaveTimerRef.current)
+    }
+
+    settingsSaveTimerRef.current = setTimeout(() => {
+      settingsSaveTimerRef.current = null
+      void persistAppSettings()
+    }, 200)
+  }
+
+  const flushSettingsSave = async () => {
+    if (settingsSaveTimerRef.current) {
+      clearTimeout(settingsSaveTimerRef.current)
+      settingsSaveTimerRef.current = null
+    }
+    await persistAppSettings()
+  }
+
+  const flushPersistedState = async () => {
+    await Promise.all([flushSessionSave(), flushSettingsSave()])
+  }
+
+  const sessionFieldsChanged = (
+    state: ReturnType<typeof useEditorStore.getState>,
+    previous: ReturnType<typeof useEditorStore.getState>,
+  ) =>
+    state.files !== previous.files ||
+    state.activeFileId !== previous.activeFileId ||
+    state.fileScrollPositions !== previous.fileScrollPositions ||
+    state.isSidebarOpen !== previous.isSidebarOpen ||
+    state.isOutlineOpen !== previous.isOutlineOpen ||
+    state.editMode !== previous.editMode ||
+    state.splitViewMode !== previous.splitViewMode
 
   const openFilePathOnce = (filePath: string) => {
     const normalizedFilePath = normalizeFilePath(filePath)
@@ -412,7 +485,12 @@ export function Editor() {
   }, [])
 
   useEffect(() => {
-    if (!isTauriRuntime() || sessionRestoreTaskRef.current) {
+    if (!isTauriRuntime()) {
+      settingsHydratedRef.current = true
+      return
+    }
+
+    if (sessionRestoreTaskRef.current) {
       return
     }
 
@@ -421,18 +499,45 @@ export function Editor() {
     const task = (async () => {
       let startupOpenPaths: string[] = []
       try {
-        const [cliFilePath, pendingOpenedFiles] = await Promise.all([
+        const settingsPromise = loadAppSettings()
+        const sessionPromise = loadEditorSession().catch((error) => {
+          console.warn("[RadishMD][session] load failed", error)
+          return null
+        })
+        const startupPathsPromise = Promise.all([
           invoke<string | null>("get_cli_file_path").catch(() => null),
           invoke<string[]>("take_opened_files").catch(() => []),
         ])
+
+        let settings: AppSettings | null = null
+        let settingsMissing = false
+        try {
+          settings = await settingsPromise
+          settingsMissing = settings === null
+        } catch (error) {
+          console.warn("[RadishMD][settings] load failed", error)
+        }
+
+        // Hydrate before applying so the store subscription does not treat this as a user edit.
+        settingsHydratedRef.current = true
+        if (!settingsTouchedRef.current && settings) {
+          lastSettingsJsonRef.current = serializeAppSettings(settings)
+          useEditorStore.setState({
+            theme: settings.theme,
+            tabSize: settings.tabSize,
+            pasteClipboardUrlOnLink: settings.pasteClipboardUrlOnLink,
+          })
+        }
+        if (settingsMissing || settingsTouchedRef.current) {
+          await persistAppSettings()
+        }
+
+        const [session, startupPaths] = await Promise.all([sessionPromise, startupPathsPromise])
+        const [cliFilePath, pendingOpenedFiles] = startupPaths
         startupOpenPaths = [cliFilePath, ...pendingOpenedFiles]
           .filter((path): path is string => Boolean(path))
           .map(normalizeFilePath)
           .filter(Boolean)
-        const session = await loadEditorSession().catch((error) => {
-          console.warn("[RadishMD][session] load failed", error)
-          return null
-        })
         if (!session) {
           for (const path of startupOpenPaths) {
             handledOpenedFilePathsRef.current.add(path)
@@ -500,8 +605,10 @@ export function Editor() {
           }
         }
       } finally {
+        settingsHydratedRef.current = true
         sessionRestoringRef.current = false
         scheduleSessionSave()
+        scheduleSettingsSave()
       }
     })()
     sessionRestoreTaskRef.current = task
@@ -511,11 +618,24 @@ export function Editor() {
 
   useEffect(() => {
     if (!isTauriRuntime()) {
-      return
+      settingsHydratedRef.current = true
     }
 
-    const unsubscribe = useEditorStore.subscribe(() => {
-      scheduleSessionSave()
+    const unsubscribe = useEditorStore.subscribe((state, previous) => {
+      if (
+        state.theme !== previous.theme ||
+        state.tabSize !== previous.tabSize ||
+        state.pasteClipboardUrlOnLink !== previous.pasteClipboardUrlOnLink
+      ) {
+        if (!settingsHydratedRef.current) {
+          settingsTouchedRef.current = true
+        }
+        scheduleSettingsSave()
+      }
+
+      if (isTauriRuntime() && sessionFieldsChanged(state, previous)) {
+        scheduleSessionSave()
+      }
     })
 
     return () => {
@@ -523,6 +643,10 @@ export function Editor() {
       if (sessionSaveTimerRef.current) {
         clearTimeout(sessionSaveTimerRef.current)
         sessionSaveTimerRef.current = null
+      }
+      if (settingsSaveTimerRef.current) {
+        clearTimeout(settingsSaveTimerRef.current)
+        settingsSaveTimerRef.current = null
       }
     }
   }, [])
@@ -642,7 +766,7 @@ export function Editor() {
         setUnsavedFilesForClose(unsaved.map(f => ({ id: f.id, name: f.name })))
         setCloseConfirmOpen(true)
       } else {
-        void flushSessionSave().finally(() => {
+        void flushPersistedState().finally(() => {
           void invoke("confirm_close")
         })
       }
@@ -667,13 +791,13 @@ export function Editor() {
       return
     }
     setCloseConfirmOpen(false)
-    await flushSessionSave()
+    await flushPersistedState()
     await invoke("confirm_close")
   }
 
   const handleCloseDiscard = () => {
     setCloseConfirmOpen(false)
-    void flushSessionSave().finally(() => {
+    void flushPersistedState().finally(() => {
       void invoke("confirm_close")
     })
   }
