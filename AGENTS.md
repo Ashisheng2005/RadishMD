@@ -43,7 +43,7 @@ Shared helpers are `src/lib/markdown-insert.ts`. Both `split-editor.tsx` and `wy
 Canonical files sit next to the executable, not in the OS app-data dir:
 
 - `{exe_dir}/data/settings.json` — `version`, `theme`, `tabSize`, `pasteClipboardUrlOnLink`
-- `{exe_dir}/data/session.json` — open roots, active path, expanded folders, scroll percents, sidebar/outline, `editMode`, `splitViewMode`
+- `{exe_dir}/data/session.json` — open roots, active path, expanded folders, scroll percents, sidebar/outline, `editMode`, `splitViewMode`, optional `openFilePaths`
 
 `tauri dev` writes them under `src-tauri/target/debug/data/`. A missing software-dir file is copied once from the legacy app-data path. Saves go through `load_*` / `save_*` commands (atomic, queued). Do not write these files from the frontend.
 
@@ -52,6 +52,14 @@ Canonical files sit next to the executable, not in the OS app-data dir:
 `src/components/editor/index.tsx` applies settings before restoring the session, and sets `settingsHydratedRef` first so that hydrate is not saved as a user edit. A new setting must be added to `AppSettings`, serialize/parse, the store, `currentSettings()`, and that subscription. Do not put theme or tab size in the session snapshot — `sessionFieldsChanged` ignores them. Session does not store document text; files are re-read from disk.
 
 Settings UI is `settings-dialog.tsx` (外观 / 编辑 / 关于), not a title-bar popover. Appearance controls stay in `appearance-settings.tsx`.
+
+## Editor tabs
+
+Tabs are not the file tree. `openFileIds` is a separate ordered list; `editor-tabs.tsx` renders it in the status-bar center, left-aligned, 5 visible (`VISIBLE_TAB_COUNT`). Paging is local UI state. `Ctrl+←` / `Ctrl+→` move that window by one and must not run while focus is in an input, textarea, or dialog.
+
+Open a tab through `appendOpenFileId` in `setActiveFile`, new-file create, and `openFileFromPath`. Do not only set `activeFileId`. `closeOpenFile` removes the tab and activates the right neighbor, then the left. It must not call `removeNode`. Deleting a tree node also drops its id from `openFileIds`.
+
+Persist paths as optional `openFilePaths` on session `version: 1`. A missing field is a legacy session: do not bump the version, and do not wipe tabs before the active file is restored. Files with no `filePath` cannot be cached. The visible-window index is not persisted.
 
 ## Backend
 

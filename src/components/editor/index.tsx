@@ -8,6 +8,7 @@ import { TitleBar } from "./title-bar"
 import { Sidebar } from "./sidebar"
 import { EditorArea } from "./editor-area"
 import { Outline } from "./outline"
+import { SectionRail } from "./section-rail"
 import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
 import { UpdateDialog } from "./update-dialog"
@@ -848,6 +849,7 @@ export function Editor() {
         <EditorArea />
         <Outline />
       </div>
+      <SectionRail />
       <StatusBar />
       <UpdateDialog
         open={updateDialogOpen}
