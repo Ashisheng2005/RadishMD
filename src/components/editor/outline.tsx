@@ -145,6 +145,36 @@ function scrollTextareaLineIntoView(textarea: HTMLTextAreaElement, content: stri
   })
 }
 
+export function measureTextareaLineTop(textarea: HTMLTextAreaElement, content: string, lineIndex: number) {
+  const lineStart = getTextareaLineStart(textarea.value || content, lineIndex)
+  return measureTextareaOffsetTop(textarea, lineStart)
+}
+
+export function jumpToHeading(
+  heading: MarkdownHeading,
+  content: string,
+  editMode: "split" | "wysiwyg",
+  splitViewMode: "split" | "editor" | "render",
+) {
+  if (editMode === "split" && splitViewMode !== "render") {
+    const textarea = document.querySelector(
+      "[data-editor-textarea]"
+    ) as HTMLTextAreaElement | null
+    if (!textarea) return
+
+    requestAnimationFrame(() => {
+      scrollTextareaLineIntoView(textarea, content, heading.lineIndex)
+
+      if (splitViewMode === "split") {
+        scrollRenderedHeadingIntoView(heading.lineIndex)
+      }
+    })
+    return
+  }
+
+  scrollRenderedHeadingIntoView(heading.lineIndex)
+}
+
 export function Outline() {
   const { content, isOutlineOpen, editMode, splitViewMode } = useEditorStore()
 
@@ -153,23 +183,7 @@ export function Outline() {
   }, [content])
 
   const handleHeadingClick = (heading: MarkdownHeading) => {
-    if (editMode === "split" && splitViewMode !== "render") {
-      const textarea = document.querySelector(
-        "[data-editor-textarea]"
-      ) as HTMLTextAreaElement | null
-      if (!textarea) return
-
-      requestAnimationFrame(() => {
-        scrollTextareaLineIntoView(textarea, content, heading.lineIndex)
-
-        if (splitViewMode === "split") {
-          scrollRenderedHeadingIntoView(heading.lineIndex)
-        }
-      })
-      return
-    }
-
-    scrollRenderedHeadingIntoView(heading.lineIndex)
+    jumpToHeading(heading, content, editMode, splitViewMode)
   }
 
   if (!isOutlineOpen) return null

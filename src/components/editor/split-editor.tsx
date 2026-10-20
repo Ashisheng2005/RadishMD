@@ -723,6 +723,7 @@ export function SplitEditor() {
             <div
               ref={previewRef}
               onScroll={contentType === "markdown" ? handlePreviewScroll : undefined}
+              data-editor-scroll-container
               className="flex-1 overflow-y-auto p-6 bg-background"
               style={{ overflowAnchor: "none" }}
             >
