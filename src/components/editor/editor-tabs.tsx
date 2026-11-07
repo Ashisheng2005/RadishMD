@@ -130,9 +130,12 @@ export function EditorTabs() {
               title={file.filePath || file.name}
               className={cn(
                 "group flex h-6 w-28 min-w-0 shrink cursor-pointer items-center gap-1 rounded-md px-1.5 text-xs",
-                active
-                  ? "bg-primary font-medium text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+                dirty
+                  ? "bg-amber-300/40 text-foreground hover:bg-amber-300/55"
+                  : active
+                    ? "bg-primary font-medium text-primary-foreground"
+                    : "bg-muted text-muted-foreground hover:bg-foreground/10 hover:text-foreground",
+                active && "font-medium",
               )}
               onClick={() => {
                 if (id !== activeFileId) {
@@ -158,7 +161,7 @@ export function EditorTabs() {
                   type="button"
                   className={cn(
                     "hidden h-4 w-4 items-center justify-center rounded-sm hover:bg-foreground/10",
-                    active
+                    active && !dirty
                       ? "text-primary-foreground/80 hover:bg-primary-foreground/15 hover:text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground",
                     "group-hover:inline-flex",

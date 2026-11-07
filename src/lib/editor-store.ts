@@ -1544,9 +1544,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }),
         }))
         lastExternalChangeWarningKey = null
-        toast.success(`已保存: ${current.name}`, {
-          style: { backgroundColor: "#22c55e", color: "#fff" },
-        })
       })
       return true
     } catch (error) {
@@ -1619,9 +1616,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           })),
         }))
         lastExternalChangeWarningKey = null
-        toast.success(`已保存: ${newName}`, {
-          style: { backgroundColor: "#22c55e", color: "#fff" },
-        })
       })
       return true
     } catch (error) {
@@ -1686,9 +1680,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
             })),
           }))
           lastExternalChangeWarningKey = null
-          toast.success(`已保存: ${newName}`, {
-            style: { backgroundColor: "#22c55e", color: "#fff" },
-          })
         })
         return true
       } catch (error) {
@@ -1735,9 +1726,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           }),
         }))
         lastExternalChangeWarningKey = null
-        toast.success(`已保存: ${current.name}`, {
-          style: { backgroundColor: "#22c55e", color: "#fff" },
-        })
       })
       return true
     } catch (error) {
@@ -1778,9 +1766,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         if (options.activate !== false) {
           await get().setActiveFile(existingFile.id)
         }
-        toast.success(`已打开: ${fileName}`, {
-          style: { backgroundColor: "#22c55e", color: "#fff" },
-        })
         return
       }
 
@@ -1829,10 +1814,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         newFileId: newFile.id,
         isPdf,
         files: summarizeFiles(get().files),
-      })
-
-      toast.success(`已打开: ${fileName}`, {
-        style: { backgroundColor: "#22c55e", color: "#fff" },
       })
     } catch (e) {
       debugEditorLog("openFileFromPath:error", {
