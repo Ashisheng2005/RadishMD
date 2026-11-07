@@ -24,6 +24,8 @@ export interface FileNode {
   canSaveText?: boolean
   editVersion?: number
   savedVersion?: number
+  tabOnly?: boolean
+  missingPromptDismissed?: boolean
 }
 
 interface FileSnapshot {
@@ -85,6 +87,9 @@ interface EditorState {
   setActiveFile: (id: string) => Promise<void>
   setOpenFileIds: (ids: string[]) => void
   closeOpenFile: (id: string) => void
+  missingTabPrompt: { id: string; name: string } | null
+  confirmDeleteMissingTab: () => void
+  dismissMissingTabPrompt: () => void
   setContent: (content: string) => void
   setContentType: (type: "markdown" | "pdf") => void
   openSearch: () => void
@@ -309,6 +314,72 @@ export async function readFileSnapshot(filePath: string): Promise<FileSnapshot> 
   return snapshot
 }
 
+export type PathStatus = "dir" | "file" | "missing"
+
+export async function getPathStatus(filePath: string): Promise<PathStatus> {
+  return invoke<PathStatus>("path_status", { path: normalizeFilePath(filePath) })
+}
+
+function fileNeedsDiskLoad(file: FileNode) {
+  return !file.isDirty && !file.isNew && (
+    file.content === undefined ||
+    (file.content === "" && file.sourceModified == null)
+  )
+}
+
+function isMissingPathError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /os error 2\b|os error 3\b|not found|no such file|找不到/i.test(message)
+}
+
+function adoptTabOnlyRoots(files: FileNode[], incoming: FileNode[]) {
+  const tabOnlyByPath = new Map<string, FileNode>()
+  for (const node of files) {
+    if (node.type === "file" && node.tabOnly && node.filePath) {
+      tabOnlyByPath.set(filePathIdentity(node.filePath), node)
+    }
+  }
+  if (tabOnlyByPath.size === 0) {
+    return { files, children: incoming }
+  }
+
+  const adoptedIds = new Set<string>()
+  const children = incoming.map((child) => {
+    if (child.type !== "file" || !child.filePath) {
+      return child
+    }
+    const existing = tabOnlyByPath.get(filePathIdentity(child.filePath))
+    if (!existing) {
+      return child
+    }
+    adoptedIds.add(existing.id)
+    const keepLoadedContent = Boolean(existing.content)
+    return {
+      ...child,
+      id: existing.id,
+      content: keepLoadedContent ? existing.content : child.content,
+      sourceModified: keepLoadedContent ? existing.sourceModified : child.sourceModified,
+      isDirty: existing.isDirty,
+      hasExternalChanges: existing.hasExternalChanges,
+      isNew: existing.isNew,
+      kind: existing.kind ?? child.kind,
+      canEdit: existing.canEdit ?? child.canEdit,
+      canSaveText: existing.canSaveText ?? child.canSaveText,
+      editVersion: existing.editVersion ?? child.editVersion,
+      savedVersion: existing.savedVersion ?? child.savedVersion,
+    }
+  })
+
+  if (adoptedIds.size === 0) {
+    return { files, children: incoming }
+  }
+
+  return {
+    files: files.filter((node) => !adoptedIds.has(node.id)),
+    children,
+  }
+}
+
 function updateFileInNodes(
   nodes: FileNode[],
   id: string,
@@ -445,6 +516,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   files: initialFiles,
   activeFileId: null,
   openFileIds: [],
+  missingTabPrompt: null,
   content: "",
   isSidebarOpen: true,
   isOutlineOpen: true,
@@ -490,6 +562,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         files: summarizeFiles(get().files),
       })
       const isPdf = file.filePath?.toLowerCase().endsWith(".pdf") ?? false
+      const needsDiskLoad = fileNeedsDiskLoad(file)
+      const showLoadedPdf = isPdf && !needsDiskLoad && Boolean(file.content)
       // Switch identity and buffer together; disk I/O must not expose the old
       // document as an editable buffer belonging to the newly selected file.
       const initialContent = file.content || ""
@@ -497,16 +571,64 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         activeFileId: id,
         openFileIds: appendOpenFileId(get().openFileIds, id),
         content: initialContent,
-        contentType: isPdf ? "pdf" : "markdown",
-        splitViewMode: isPdf ? "render" : get().splitViewMode,
+        contentType: showLoadedPdf ? "pdf" : "markdown",
+        splitViewMode: showLoadedPdf ? "render" : get().splitViewMode,
       })
-      get().updateCounts(isPdf ? "" : initialContent)
+      get().updateCounts(showLoadedPdf ? "" : initialContent)
+
+      if (file.filePath && needsDiskLoad) {
+        if (file.missingPromptDismissed) {
+          return
+        }
+
+        try {
+          const status = await getPathStatus(file.filePath)
+          if (get().activeFileId !== id) {
+            return
+          }
+          if (status === "missing") {
+            set({
+              missingTabPrompt: { id, name: file.name },
+              content: "",
+              contentType: "markdown",
+            })
+            get().updateCounts("")
+            return
+          }
+        } catch (error) {
+          if (get().activeFileId !== id) {
+            return
+          }
+          debugEditorLog("setActiveFile:status-error", {
+            id,
+            filePath: file.filePath,
+            error: error instanceof Error ? error.message : String(error),
+          })
+          toast.error(`打开失败: ${file.name}`, {
+            style: { backgroundColor: "#ef4444", color: "#fff" },
+          })
+          return
+        }
+      }
 
       if (file.filePath) {
         try {
           if (isPdf) {
+            if (!needsDiskLoad && file.content) {
+              return
+            }
             const url = convertFileSrc(file.filePath)
-            set({ content: url, contentType: "pdf", splitViewMode: "render", isSidebarOpen: false, isOutlineOpen: false })
+            set((state) => ({
+              files: updateFileInNodes(state.files, id, (node) => ({
+                ...node,
+                content: url,
+              })),
+              content: url,
+              contentType: "pdf",
+              splitViewMode: "render",
+              isSidebarOpen: false,
+              isOutlineOpen: false,
+            }))
             get().updateCounts("")
             return
           }
@@ -575,8 +697,26 @@ export const useEditorStore = create<EditorState>((set, get) => ({
               hasExternalChanges: false,
             })),
           }))
-        } catch {
-          // Fall back to the in-memory version if the file cannot be read.
+        } catch (error) {
+          if (get().activeFileId !== id) {
+            return
+          }
+          if (needsDiskLoad && isMissingPathError(error)) {
+            set({
+              missingTabPrompt: { id, name: file.name },
+              content: "",
+              contentType: "markdown",
+            })
+            get().updateCounts("")
+            return
+          }
+          if (needsDiskLoad) {
+            toast.error(`打开失败: ${file.name}`, {
+              style: { backgroundColor: "#ef4444", color: "#fff" },
+            })
+            return
+          }
+          // Fall back to the in-memory version if a refresh cannot be read.
         }
       }
 
@@ -591,7 +731,12 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         fileName: file.name,
         contentLength: currentContent.length,
       })
-      set({ content: currentContent, contentType: isPdf ? "pdf" : "markdown", splitViewMode: isPdf ? "render" : get().splitViewMode })
+      const loadedPdf = isPdf && currentContent.length > 0
+      set({
+        content: currentContent,
+        contentType: loadedPdf ? "pdf" : "markdown",
+        splitViewMode: loadedPdf ? "render" : get().splitViewMode,
+      })
       get().updateCounts(isPdf ? "" : currentContent)
     }
   },
@@ -622,6 +767,41 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     set({ openFileIds: nextOpenFileIds })
     void get().setActiveFile(neighborId)
+  },
+
+  confirmDeleteMissingTab: () => {
+    const prompt = get().missingTabPrompt
+    if (!prompt) {
+      return
+    }
+
+    const node = get().findNodeById(prompt.id)
+    set({ missingTabPrompt: null })
+    if (node?.tabOnly) {
+      get().removeNode(prompt.id, true)
+      return
+    }
+    get().closeOpenFile(prompt.id)
+  },
+
+  dismissMissingTabPrompt: () => {
+    const prompt = get().missingTabPrompt
+    if (!prompt) {
+      return
+    }
+
+    set({ missingTabPrompt: null })
+    set((state) => ({
+      files: updateFileInNodes(state.files, prompt.id, (node) => ({
+        ...node,
+        missingPromptDismissed: true,
+      })),
+      content: state.activeFileId === prompt.id ? "" : state.content,
+      contentType: state.activeFileId === prompt.id ? "markdown" : state.contentType,
+    }))
+    if (get().activeFileId === prompt.id) {
+      get().updateCounts("")
+    }
   },
 
   setContent: (content: string) => {
@@ -770,20 +950,21 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   },
 
   replaceFolderChildren: (id: string, children: FileNode[]) => {
-    set((state) => ({
-      files: updateFileInNodes(state.files, id, (node) => {
+    const adopted = adoptTabOnlyRoots(get().files, children)
+    set({
+      files: updateFileInNodes(adopted.files, id, (node) => {
         if (node.type !== "folder") {
           return node
         }
 
         return {
           ...node,
-          children: mergeRefreshedChildren(node.children, children),
+          children: mergeRefreshedChildren(node.children, adopted.children),
           isLoaded: true,
           isLoading: false,
         }
       }),
-    }))
+    })
   },
 
   activateFileById: (id: string) => {
@@ -842,6 +1023,7 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
     const file = get().findNodeById(activeFileId)
     if (!file || file.type !== "file" || !file.filePath) return
+    if (file.missingPromptDismissed || fileNeedsDiskLoad(file)) return
 
     if (isExternalChangeSuppressed(file.filePath)) {
       debugEditorLog("checkActiveFileForExternalChanges:suppressed", {
@@ -1585,6 +1767,14 @@ export const useEditorStore = create<EditorState>((set, get) => ({
           fileName,
           existingFileId: existingFile.id,
         })
+        if (existingFile.tabOnly) {
+          set((state) => ({
+            files: updateFileInNodes(state.files, existingFile.id, (node) => ({
+              ...node,
+              tabOnly: undefined,
+            })),
+          }))
+        }
         if (options.activate !== false) {
           await get().setActiveFile(existingFile.id)
         }

@@ -15,7 +15,7 @@ RadishMD is a Tauri 2 + React 19 Markdown editor. Frontend is `src/`. Rust is on
 
 Both modes edit with a native `<textarea>`. `@codemirror/*` is installed and unused. Do not wire CodeMirror back in unless asked.
 
-- `editMode === "split"` and every PDF render `SplitEditor` (`editor-area.tsx`). PDF uses `pdfjs-dist` in that view and disables scroll sync.
+- `editMode === "split"` and every PDF render `SplitEditor` (`editor-area.tsx`). PDF is an `<embed>`, not `pdf-renderer.tsx` (that file is unused). Scroll sync returns early when `contentType === "pdf"`.
 - WYSIWYG is `parseMarkdownToBlocks()` → `Block`: view mode is `dangerouslySetInnerHTML`, edit mode is a textarea. No `contentEditable`.
 - Toolbar buttons `preventDefault` on left `mousedown` so the textarea keeps its selection. WYSIWYG also exposes formatting as `window.__formatShortcut`.
 - React StrictMode double-mounts in dev. Listeners, the file watcher, and the markdown worker need cleanup.
@@ -49,15 +49,36 @@ Canonical files sit next to the executable, not in the OS app-data dir:
 
 `localStorage` keys `radishmd.theme`, `radishmd.tabSize`, and `radishmd.pasteClipboardUrlOnLink` are a first-paint cache only. `index.html` reads the theme key before React and still accepts an old Zustand `{state:{theme}}` blob. The settings file wins on hydrate. A missing `pasteClipboardUrlOnLink` means false.
 
-`src/components/editor/index.tsx` applies settings before restoring the session, and sets `settingsHydratedRef` first so that hydrate is not saved as a user edit. A new setting must be added to `AppSettings`, serialize/parse, the store, `currentSettings()`, and that subscription. Do not put theme or tab size in the session snapshot — `sessionFieldsChanged` ignores them. Session does not store document text; files are re-read from disk.
+`src/components/editor/index.tsx` applies settings before restoring the session, and sets `settingsHydratedRef` first so that hydrate is not saved as a user edit. A new setting must be added to `AppSettings`, serialize/parse, the store, `currentSettings()`, and that subscription. Do not put theme or tab size in the session snapshot — `sessionFieldsChanged` ignores them. Session does not store document text.
+
+Startup restore classifies each `rootPath` with `getPathStatus` / Rust `path_status` (`"dir"` | `"file"` | `"missing"`; only `NotFound` is `"missing"`). Do not use `is_directory` here: a missing path is false, so restore used to open it as a file, toast `打开失败`, and freeze the window. `is_directory`, `path_status`, `read_file_snapshot`, and `read_directory_entries` are sync commands on the Tauri main thread.
+
+- `"dir"`: `openFolderPath` with `activateFirstFile: false` (list only, no body).
+- `"file"`: unloaded sidebar node, no body read.
+- `"missing"`: skip, no toast.
+- CLI and manual opens still read immediately through `openExternalPath`.
 
 Settings UI is `settings-dialog.tsx` (外观 / 编辑 / 关于), not a title-bar popover. Appearance controls stay in `appearance-settings.tsx`.
+
+## Section rail
+
+`section-rail.tsx` is a heading rail, not a document minimap. Do not draw per-line canvas bars.
+
+- Only h1/h2 from `parseMarkdownHeadings`. Shown only when the outline is closed, the file is not a PDF, there are at least two such headings, and the tracked scroller can scroll.
+- Clicks call `jumpToHeading` in `outline.tsx`. Do not add a second scroll path. That helper still queries `[contenteditable]` after a rendered jump; nothing sets it.
+- Hover is one truncated popover chip beside the tick, not a full-height panel. Moving between ticks moves that chip; leaving fades it out.
+- Ticks use a 20px step and are centered in the track when that packing fits. Spread by source-line proportion only when it does not. The rail is `fixed` to the window; tick tops are inset below the title bar and above the status bar.
+- Editor-only spies `[data-editor-textarea]` via `measureTextareaLineTop`. Every other markdown view spies `[data-editor-scroll-container]` (WYSIWYG and the split preview both set it). In split mode the rail follows the preview; existing percent sync moves the textarea.
 
 ## Editor tabs
 
 Tabs are not the file tree. `openFileIds` is a separate ordered list; `editor-tabs.tsx` renders it in the status-bar center, left-aligned, 5 visible (`VISIBLE_TAB_COUNT`). Paging is local UI state. `Ctrl+←` / `Ctrl+→` move that window by one and must not run while focus is in an input, textarea, or dialog.
 
 Open a tab through `appendOpenFileId` in `setActiveFile`, new-file create, and `openFileFromPath`. Do not only set `activeFileId`. `closeOpenFile` removes the tab and activates the right neighbor, then the left. It must not call `removeNode`. Deleting a tree node also drops its id from `openFileIds`.
+
+On launch, only `activeFilePath` is read. Other `openFilePaths` are tabs only (`resolveSessionFileNode`). No active path means an empty editor — do not activate `openFileIds[0]`. A path not already in the tree is a `tabOnly` placeholder: hidden from the file tree, omitted from session `rootPaths`, still stored in `openFilePaths`. `replaceFolderChildren` adopts a root `tabOnly` node when the same path appears in a directory listing and keeps its id. An explicit `openFileFromPath` of that node clears `tabOnly`.
+
+An unloaded node (`content` undefined, or `""` with `sourceModified == null`, and not dirty/new) calls `getPathStatus` before read. Missing sets `missingTabPrompt`; `missing-tab-dialog.tsx` asks `文档不存在，是否删除标签？`. Yes calls `closeOpenFile`, and `removeNode` only when `tabOnly`. No sets `missingPromptDismissed` and must not ask or stat again this session. Other errors toast and keep the tab. Already-loaded text still refreshes with `read_file_snapshot` on switch and does not use that dialog. An already-loaded PDF returns early — its node `content` is the `convertFileSrc` URL, so do not re-close the sidebar. `checkActiveFileForExternalChanges` skips unloaded and dismissed files. `watch_file_changes` may fail for a missing active path; that error is not fatal.
 
 Persist paths as optional `openFilePaths` on session `version: 1`. A missing field is a legacy session: do not bump the version, and do not wipe tabs before the active file is restored. Files with no `filePath` cannot be cached. The visible-window index is not persisted.
 

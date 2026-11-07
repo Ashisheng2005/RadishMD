@@ -157,6 +157,9 @@ function filterNodes(nodes: FileNode[], query: string): FileNode[] {
   if (!normalizedQuery) return nodes
 
   return nodes.reduce<FileNode[]>((result, node) => {
+    if (node.tabOnly) {
+      return result
+    }
     const matchesSelf = node.name.toLocaleLowerCase().includes(normalizedQuery)
     const children = node.children ? filterNodes(node.children, normalizedQuery) : []
     if (matchesSelf || children.length > 0) {
@@ -379,7 +382,7 @@ export function FileTree({ filter = "" }: { filter?: string }) {
           onCancel={cancelCreate}
         />
       )}
-      {visibleFiles.map((node) => (
+      {visibleFiles.filter((node) => !node.tabOnly).map((node) => (
         <FileTreeItem key={node.id} node={node} filter={filter} />
       ))}
     </div>

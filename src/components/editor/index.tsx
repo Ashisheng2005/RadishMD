@@ -3,7 +3,7 @@ import { flushSync } from "react-dom"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { toast } from "sonner"
-import { normalizeFilePath, useEditorStore } from "@/lib/editor-store"
+import { getPathStatus, normalizeFilePath, useEditorStore } from "@/lib/editor-store"
 import { TitleBar } from "./title-bar"
 import { Sidebar } from "./sidebar"
 import { EditorArea } from "./editor-area"
@@ -11,10 +11,11 @@ import { Outline } from "./outline"
 import { SectionRail } from "./section-rail"
 import { StatusBar } from "./status-bar"
 import { cn } from "@/lib/utils"
+import { MissingTabDialog } from "./missing-tab-dialog"
 import { UpdateDialog } from "./update-dialog"
 import { CloseConfirmDialog } from "./close-confirm-dialog"
 import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
-import { ensureTreeNodeByPath, openExternalPath, restoreExpandedFolders } from "@/lib/file-operations"
+import { ensureUnloadedFileNode, openExternalPath, openFolderPath, resolveSessionFileNode, restoreExpandedFolders } from "@/lib/file-operations"
 import { loadEditorSession, saveEditorSession, type PersistedEditorSession } from "@/lib/editor-session"
 import { loadAppSettings, saveAppSettings, serializeAppSettings, type AppSettings } from "@/lib/app-settings"
 import {
@@ -101,8 +102,8 @@ export function Editor() {
     const expandedFolderPaths: string[] = []
     const scrollPositions: PersistedEditorSession["scrollPositions"] = {}
     const rootPaths = state.files
-      .map((node) => node.filePath)
-      .filter((path): path is string => Boolean(path))
+      .filter((node) => Boolean(node.filePath) && !node.tabOnly)
+      .map((node) => node.filePath as string)
 
     const visit = (nodes: typeof state.files) => {
       for (const node of nodes) {
@@ -560,7 +561,12 @@ export function Editor() {
 
         for (const rootPath of session.rootPaths) {
           try {
-            await openExternalPath(rootPath, { activate: false, forceReload: false })
+            const status = await getPathStatus(rootPath)
+            if (status === "dir") {
+              await openFolderPath(rootPath, { activateFirstFile: false, forceReload: false })
+            } else if (status === "file") {
+              ensureUnloadedFileNode(rootPath)
+            }
           } catch (error) {
             console.warn("[RadishMD][session] failed to restore path", rootPath, error)
           }
@@ -589,7 +595,7 @@ export function Editor() {
           const restoredOpenIds: string[] = []
           for (const path of session.openFilePaths) {
             try {
-              const node = await ensureTreeNodeByPath(path)
+              const node = await resolveSessionFileNode(path)
               if (node?.type === "file" && !restoredOpenIds.includes(node.id)) {
                 restoredOpenIds.push(node.id)
               }
@@ -606,14 +612,9 @@ export function Editor() {
             await openExternalPath(path)
           }
         } else if (!startupExternalOpenRef.current && session.activeFilePath) {
-          const activeFile = await ensureTreeNodeByPath(session.activeFilePath)
+          const activeFile = await resolveSessionFileNode(session.activeFilePath)
           if (activeFile?.type === "file") {
             await useEditorStore.getState().setActiveFile(activeFile.id)
-          }
-        } else if (!startupExternalOpenRef.current) {
-          const firstOpenId = useEditorStore.getState().openFileIds[0]
-          if (firstOpenId) {
-            await useEditorStore.getState().setActiveFile(firstOpenId)
           }
         }
       } catch (error) {
@@ -691,12 +692,16 @@ export function Editor() {
     }
 
     const syncFileWatcher = async () => {
-      if (activeFilePath) {
-        await invoke("watch_file_changes", { filePath: activeFilePath })
-        return
-      }
+      try {
+        if (activeFilePath) {
+          await invoke("watch_file_changes", { filePath: activeFilePath })
+          return
+        }
 
-      await invoke("clear_file_watcher")
+        await invoke("clear_file_watcher")
+      } catch (error) {
+        console.warn("[RadishMD][watcher] sync failed", error)
+      }
     }
 
     void syncFileWatcher()
@@ -865,6 +870,7 @@ export function Editor() {
         onCancelDownload={() => void handleCancelDownload()}
         onOpenAssetFolder={handleOpenAssetFolder}
       />
+      <MissingTabDialog />
       <CloseConfirmDialog
         open={closeConfirmOpen}
         unsavedFiles={unsavedFilesForClose}

@@ -236,6 +236,47 @@ export async function restoreExpandedFolders(folderPaths: string[]) {
   }
 }
 
+export function ensureUnloadedFileNode(filePath: string, tabOnly = false): FileNode {
+  const existing = useEditorStore.getState().findNodeByPath(filePath)
+  if (existing?.type === "file") {
+    return existing
+  }
+
+  const normalizedFilePath = normalizeFilePath(filePath)
+  const isPdf = normalizedFilePath.toLowerCase().endsWith(".pdf")
+  const extension = getFileExtension(normalizedFilePath)
+  const node: FileNode = {
+    id: `tab-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    name: getBaseName(normalizedFilePath),
+    type: "file",
+    filePath: normalizedFilePath,
+    tabOnly: tabOnly || undefined,
+    isDirty: false,
+    hasExternalChanges: false,
+    kind: isPdf ? "pdf" : extension === "md" || extension === "markdown" ? "markdown" : "text",
+    canEdit: !isPdf,
+    canSaveText: !isPdf,
+    editVersion: 0,
+    savedVersion: 0,
+  }
+  useEditorStore.getState().addTreeNodes([node])
+  return useEditorStore.getState().findNodeByPath(normalizedFilePath) ?? node
+}
+
+export async function resolveSessionFileNode(path: string): Promise<FileNode | null> {
+  const existing = useEditorStore.getState().findNodeByPath(path)
+  if (existing?.type === "file") {
+    return existing
+  }
+
+  const located = await ensureTreeNodeByPath(path)
+  if (located?.type === "file") {
+    return located
+  }
+
+  return ensureUnloadedFileNode(path, true)
+}
+
 // Load just the path's ancestors, without changing their expanded state.
 export async function ensureTreeNodeByPath(path: string, type: FileNode["type"] = "file"): Promise<FileNode | null> {
   const key = filePathIdentity(path)

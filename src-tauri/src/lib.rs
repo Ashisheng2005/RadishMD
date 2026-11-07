@@ -198,6 +198,16 @@ fn is_directory(path: String) -> bool {
 }
 
 #[tauri::command]
+fn path_status(path: String) -> Result<String, String> {
+    match fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok("dir".to_string()),
+        Ok(_) => Ok("file".to_string()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("missing".to_string()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
@@ -974,6 +984,7 @@ pub fn run() {
             read_directory,
             read_directory_entries,
             is_directory,
+            path_status,
             read_image_as_data_url,
             read_file_as_data_url,
             get_cli_file_path,
