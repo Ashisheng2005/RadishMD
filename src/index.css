@@ -130,7 +130,9 @@
   input,
   textarea,
   [contenteditable],
-  [contenteditable="true"] {
+  [contenteditable="true"],
+  [data-markdown-preview],
+  [data-markdown-preview] * {
     user-select: text;
     -webkit-user-select: text;
   }

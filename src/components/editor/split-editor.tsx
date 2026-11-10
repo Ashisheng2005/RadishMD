@@ -702,10 +702,11 @@ export function SplitEditor() {
               onPaste={handleTextareaPaste}
               onScroll={handleEditorScroll}
               className={cn(
-                "flex-1 w-full resize-none p-6 bg-background text-foreground",
+                "flex-1 w-full resize-none bg-background text-foreground",
                 "font-mono text-sm leading-relaxed",
                 "focus:outline-none focus:ring-0",
-                "placeholder:text-muted-foreground"
+                "placeholder:text-muted-foreground",
+                splitViewMode === "split" ? "px-12 py-6" : "p-6",
               )}
               placeholder="开始编写 Markdown..."
               spellCheck={false}
@@ -724,6 +725,7 @@ export function SplitEditor() {
               ref={previewRef}
               onScroll={contentType === "markdown" ? handlePreviewScroll : undefined}
               data-editor-scroll-container
+              data-markdown-preview
               className="flex-1 overflow-y-auto p-6 bg-background"
               style={{ overflowAnchor: "none" }}
             >

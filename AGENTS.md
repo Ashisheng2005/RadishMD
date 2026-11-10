@@ -8,7 +8,7 @@ RadishMD is a Tauri 2 + React 19 Markdown editor. Frontend is `src/`. Rust is on
 - `npm run tauri dev` — full app. `beforeDevCommand` (`scripts/start-tauri-dev.mjs`) starts Vite on **1421** only if that port is free; if it is taken the script exits 0 and reuses the existing server. `devUrl` is `http://localhost:1421`.
 - `npm run dev:tauri` — Vite on 1421 with `strictPort`, without Rust.
 - `npm run build` is `tsc && vite build`. There is no lint or test script. Focused typecheck: `npx tsc --noEmit`. Manual check is `npm run dev` or `npm run tauri dev`.
-- Version source of truth is `package.json`. `predev` / `prebuild` / `prepreview` / `pretauri` run `version:sync` into `tauri.conf.json` and `Cargo.toml`. Do not bump those by hand.
+- Version source of truth is `package.json`. `predev` / `prebuild` / `prepreview` / `pretauri` run `version:sync` into `tauri.conf.json` and `Cargo.toml`. Do not bump those by hand. `version:sync` does not touch `src-tauri/Cargo.lock`; a release bump must also change the `radishmd` package version there. Release tags are `v*` (`release.yml`).
 - Bundle targets live in `tauri.windows.conf.json` (nsis), `tauri.linux.conf.json` (deb/rpm), and `tauri.macos.conf.json` (dmg), not only `tauri.conf.json`.
 
 ## Editors
@@ -16,6 +16,7 @@ RadishMD is a Tauri 2 + React 19 Markdown editor. Frontend is `src/`. Rust is on
 Both modes edit with a native `<textarea>`. `@codemirror/*` is installed and unused. Do not wire CodeMirror back in unless asked.
 
 - `editMode === "split"` and every PDF render `SplitEditor` (`editor-area.tsx`). PDF is an `<embed>`, not `pdf-renderer.tsx` (that file is unused). Scroll sync returns early when `contentType === "pdf"`.
+- `index.css` sets `user-select: none` on `*`. Split preview text is selectable only because the scroll container has `data-markdown-preview`, and the exception includes `[data-markdown-preview] *`. A class on the container does not override the universal rule on its children. WYSIWYG rendered blocks stay non-selectable; a click enters the textarea.
 - WYSIWYG is `parseMarkdownToBlocks()` → `Block`: view mode is `dangerouslySetInnerHTML`, edit mode is a textarea. No `contentEditable`.
 - Toolbar buttons `preventDefault` on left `mousedown` so the textarea keeps its selection. WYSIWYG also exposes formatting as `window.__formatShortcut`.
 - React StrictMode double-mounts in dev. Listeners, the file watcher, and the markdown worker need cleanup.
@@ -75,6 +76,8 @@ Settings UI is `settings-dialog.tsx` (外观 / 编辑 / 关于), not a title-bar
 Tabs are not the file tree. `openFileIds` is a separate ordered list; `editor-tabs.tsx` renders it in the status-bar center, left-aligned, 5 visible (`VISIBLE_TAB_COUNT`). Paging is local UI state. `Ctrl+←` / `Ctrl+→` move that window by one and must not run while focus is in an input, textarea, or dialog.
 
 Open a tab through `appendOpenFileId` in `setActiveFile`, new-file create, and `openFileFromPath`. Do not only set `activeFileId`. `closeOpenFile` removes the tab and activates the right neighbor, then the left. It must not call `removeNode`. Deleting a tree node also drops its id from `openFileIds`.
+
+A dirty or new tab uses `bg-amber-300/40` (same amber as the file-tree dot). Open and save success is that color clearing when `isDirty` / `isNew` clear. Do not add an `已打开` or `已保存` toast. Keep failure toasts.
 
 On launch, only `activeFilePath` is read. Other `openFilePaths` are tabs only (`resolveSessionFileNode`). No active path means an empty editor — do not activate `openFileIds[0]`. A path not already in the tree is a `tabOnly` placeholder: hidden from the file tree, omitted from session `rootPaths`, still stored in `openFilePaths`. `replaceFolderChildren` adopts a root `tabOnly` node when the same path appears in a directory listing and keeps its id. An explicit `openFileFromPath` of that node clears `tabOnly`.
 
