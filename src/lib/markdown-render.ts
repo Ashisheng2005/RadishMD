@@ -208,9 +208,13 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       while (j < lines.length) {
         const nextLine = lines[j]
         if (nextLine.trim() === "") {
-          // Empty line within blockquote
-          content += "\n"
-          j++
+          // A blank line ends the quote unless another quote line follows.
+          if (j + 1 < lines.length && /^>\s*/.test(lines[j + 1])) {
+            content += "\n"
+            j++
+          } else {
+            break
+          }
         } else {
           const nextQuoteMatch = nextLine.match(/^>\s*(.*)$/)
           if (nextQuoteMatch) {
@@ -296,8 +300,6 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
 
   // Restore & that wasn't part of &amp;
   result = result.replace(new RegExp(AMP_PLACEHOLDER, 'g'), "&amp;")
-  // HTML collapses a raw newline. Keep the source break, same as WYSIWYG.
-  result = result.replace(/\n/g, "<br>")
 
   // Now process images in the escaped text
   // The captured URL may contain &amp; which we need to decode before passing to buildImageTag
@@ -314,6 +316,8 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
   result = renderMarkdownEmphasis(result)
   // Inline math $...$
   result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => MATH_INLINE_PLACEHOLDER(formula))
+  // After emphasis and math, so their newline guards still see a real newline.
+  result = result.replace(/\n/g, "<br>")
   result = result.replace(/\[([^\]]+)\]\((&lt;[\s\S]*?&gt;|[^)]+)\)/g, (_match, label, href) => {
     const destination = href.startsWith("&lt;") && href.endsWith("&gt;") ? href.slice(4, -4) : href
     return `<a href="${destination}" class="text-primary underline underline-offset-2 cursor-pointer">${label}</a>`

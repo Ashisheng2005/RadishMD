@@ -216,9 +216,13 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
       while (j < lines.length) {
         const nextLine = lines[j]
         if (nextLine.trim() === "") {
-          // Empty line within blockquote
-          content += "\n"
-          j++
+          // A blank line ends the quote unless another quote line follows.
+          if (j + 1 < lines.length && /^>\s*/.test(lines[j + 1])) {
+            content += "\n"
+            j++
+          } else {
+            break
+          }
         } else {
           const nextQuoteMatch = nextLine.match(/^>\s*(.*)$/)
           if (nextQuoteMatch) {
@@ -368,18 +372,18 @@ export function renderInlineMarkdown(text: string, baseFilePath?: string | null)
     return resolvedHtml
   }
 
-  // Convert newlines to <br> for multi-line support
   result = result.replace(/`([^`]+)`/g, (_match, code) => {
     const key = `\x00CODE:${codePlaceholders.length}\x00`
     codePlaceholders.push(`<code class="bg-muted px-1.5 py-0.5 rounded text-sm font-mono text-primary">${escapeHtml(code)}</code>`)
     return key
   })
-  result = result.replace(/\n/g, "<br>")
 
   result = renderMarkdownEmphasis(result)
 
   // Inline math $...$
   result = result.replace(/\$([^$\n]+)\$/g, (_match, formula) => renderMathInline(formula))
+  // After emphasis and math, so their newline guards still see a real newline.
+  result = result.replace(/\n/g, "<br>")
 
   // Images (markdown style) - resolve local image paths to asset URLs
   result = result.replace(
