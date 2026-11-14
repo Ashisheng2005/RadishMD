@@ -254,6 +254,7 @@ function parseMarkdownToBlocks(markdown: string): MarkdownBlock[] {
       if (nextLine.match(/^---+$/)) break
       if (parseMarkdownHeadingLine(nextLine)) break
       if (nextLine.match(/^-\s/)) break
+      if (nextLine.match(/^\d+\.\s/)) break
       if (nextLine.match(/^>\s/)) break
       if (isTableRowLine(nextLine)) break
       paragraphLines.push(nextLine)
@@ -295,6 +296,8 @@ function renderInlineMarkdown(text: string, baseFilePath?: string | null): strin
 
   // Restore & that wasn't part of &amp;
   result = result.replace(new RegExp(AMP_PLACEHOLDER, 'g'), "&amp;")
+  // HTML collapses a raw newline. Keep the source break, same as WYSIWYG.
+  result = result.replace(/\n/g, "<br>")
 
   // Now process images in the escaped text
   // The captured URL may contain &amp; which we need to decode before passing to buildImageTag
@@ -368,7 +371,7 @@ function renderMarkdownBlockToHtml(block: MarkdownBlock, activeFilePath?: string
         return ""
       }
 
-      if (block.content.startsWith("<") || block.content.startsWith("-") || block.content.match(/^\d+\./)) {
+      if (block.content.startsWith("<")) {
         return block.content
       }
 
