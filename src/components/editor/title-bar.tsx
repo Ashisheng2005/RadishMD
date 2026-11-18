@@ -9,6 +9,7 @@ import {
   SlidersHorizontal,
   FileEdit,
   Search,
+  FileOutput,
   FileText,
 } from "lucide-react"
 import { useCallback, useDeferredValue, useEffect, useRef, useState, useTransition } from "react"
@@ -26,6 +27,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { cn } from "@/lib/utils"
 import { SettingsDialog } from "./settings-dialog"
+import { exportActiveFile } from "@/lib/export-document"
 
 interface TitleBarProps {
   checkingForUpdate: boolean
@@ -560,6 +562,26 @@ export function TitleBar({
 
       {/* Right Controls */}
       <div className="flex items-center gap-1">
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="另存为"
+                onClick={() => void exportActiveFile()}
+              >
+                <FileOutput className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              另存为
+              <span className="ml-2 text-muted-foreground">Ctrl+Alt+S</span>
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>

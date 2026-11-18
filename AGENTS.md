@@ -39,6 +39,15 @@ Shared helpers are `src/lib/markdown-insert.ts`. Both `split-editor.tsx` and `wy
 - A saved document gets a relative path; unsaved or cross-drive paths stay absolute. Always forward slashes. Wrap the destination in `<>` when it has spaces, parentheses, or angle brackets.
 - Capture textarea value and selection **before** the clipboard or dialog await. The file dialog blurs the WYSIWYG textarea and leaves edit mode. If `activeFileId` changed when the await returns, drop the insert.
 
+## Export
+
+另存为是副本，不切换当前标签，也不清脏标记。入口在标题栏，快捷键 `Ctrl+Alt+S`。`Ctrl+S` 仍只保存当前文件。对话框过滤器是 Markdown、文本、HTML、PDF。扩展名以返回路径为准；没有扩展名就中止。
+
+- `txt` / `md` / `markdown`：当前缓冲区原样写入。`.txt` 不去掉 Markdown 标记。
+- `html` / `pdf`：同一份渲染结果。公式、本地图片和浅色 Mermaid 在隐藏的 `export` 窗口里完成。隐藏窗口不挂 `App`，否则会再读一次 session。
+- 目标路径已经是打开的标签，或当前文件是 PDF，就拒绝。
+- PDF 不走 `write_file_atomic`。Windows 用 WebView2 `PrintToPdf`，macOS 用 `WKWebView.createPDF`，Linux 用接受 PDF 的虚拟打印机写 `file://`。一次只能导出一份。
+
 ## Persistence
 
 Canonical files sit next to the executable, not in the OS app-data dir:

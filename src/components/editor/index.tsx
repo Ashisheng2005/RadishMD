@@ -15,6 +15,7 @@ import { MissingTabDialog } from "./missing-tab-dialog"
 import { UpdateDialog } from "./update-dialog"
 import { CloseConfirmDialog } from "./close-confirm-dialog"
 import { isTauriRuntime, openExternalTarget } from "@/lib/runtime"
+import { exportActiveFile } from "@/lib/export-document"
 import { ensureUnloadedFileNode, openExternalPath, openFolderPath, resolveSessionFileNode, restoreExpandedFolders } from "@/lib/file-operations"
 import { loadEditorSession, saveEditorSession, type PersistedEditorSession } from "@/lib/editor-session"
 import { loadAppSettings, saveAppSettings, serializeAppSettings, type AppSettings } from "@/lib/app-settings"
@@ -390,7 +391,13 @@ export function Editor() {
       const key = e.key.toLowerCase()
 
       // Save should work even while focus is inside the editor.
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "s") {
+      if ((e.ctrlKey || e.metaKey) && e.altKey && !e.shiftKey && key === "s") {
+        e.preventDefault()
+        void exportActiveFile()
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "s") {
         e.preventDefault()
         saveFile()
         return

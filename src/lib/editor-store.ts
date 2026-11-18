@@ -320,7 +320,7 @@ export async function getPathStatus(filePath: string): Promise<PathStatus> {
   return invoke<PathStatus>("path_status", { path: normalizeFilePath(filePath) })
 }
 
-function fileNeedsDiskLoad(file: FileNode) {
+export function fileNeedsDiskLoad(file: FileNode) {
   return !file.isDirty && !file.isNew && (
     file.content === undefined ||
     (file.content === "" && file.sourceModified == null)

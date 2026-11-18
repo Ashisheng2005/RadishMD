@@ -54,7 +54,7 @@ function resolveImagePathsInHtml(chunks: MarkdownRenderChunk[], baseFilePath: st
 }
 
 // Renders math placeholders in HTML chunks - called only in main thread
-function renderMathInHtml(html: string): string {
+export function renderMathInHtml(html: string): string {
   // Render inline math placeholders %%MATH_INLINE:encoded%%
   html = html.replace(/%%MATH_INLINE:([^%]+)%%/g, (_match, encoded) => {
     const formula = decodeURIComponent(encoded)

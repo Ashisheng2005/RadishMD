@@ -14,6 +14,8 @@ use tauri::Manager;
 use tauri::{Emitter, WindowEvent};
 use tauri_plugin_cli::CliExt;
 
+mod export_pdf;
+
 const GITHUB_OWNER: &str = "Ashisheng2005";
 const GITHUB_REPO: &str = "RadishMD";
 const UPDATE_DOWNLOAD_PROGRESS_EVENT: &str = "radishmd://update-download-progress";
@@ -1006,7 +1008,13 @@ pub fn run() {
             create_file,
             create_directory,
             reveal_in_explorer,
-            confirm_close
+            confirm_close,
+            export_pdf::take_export_html,
+            export_pdf::finish_export_render,
+            export_pdf::fail_export_render,
+            export_pdf::close_export_preview,
+            export_pdf::prepare_export_preview,
+            export_pdf::export_pdf
         ])
         .setup(|app| {
             let window = app.get_webview_window("main").unwrap();

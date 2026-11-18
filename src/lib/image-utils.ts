@@ -222,7 +222,7 @@ function normalizeLocalPath(filePath: string) {
 
 // Turn a markdown image source into a local filesystem path.
 // Remote URLs and relative paths without a saved document stay unresolved.
-function toLocalImagePath(source: string, baseFilePath?: string | null) {
+export function localImagePath(source: string, baseFilePath?: string | null) {
   let path = unwrapImageSource(source)
   if (!path || isWebSource(path)) {
     return null
@@ -276,7 +276,7 @@ export function resolveImageSource(source: string, baseFilePath?: string | null)
     return prepared
   }
 
-  const localPath = toLocalImagePath(prepared, baseFilePath)
+  const localPath = localImagePath(prepared, baseFilePath)
   if (!localPath) {
     return prepared
   }
@@ -286,7 +286,7 @@ export function resolveImageSource(source: string, baseFilePath?: string | null)
 
 export function getImageAltFromSource(source: string) {
   const prepared = unwrapImageSource(source)
-  const localPath = toLocalImagePath(prepared) ?? prepared
+  const localPath = localImagePath(prepared) ?? prepared
   const cleanedSource = localPath.split(/[?#]/)[0]
   const fileName = cleanedSource.split(/[\\/]/).pop()?.trim()
   if (!fileName) {
