@@ -285,6 +285,29 @@ export function parseMarkdownToBlocks(markdown: string): Block[] {
   return blocks
 }
 
+export function headingMarker(type: string) {
+  const level = Number(/^heading([1-6])$/.exec(type)?.[1])
+  if (!level) return ""
+  return `${"#".repeat(level)} `
+}
+
+export function storedHeadingContent(type: string, source: string) {
+  const marker = headingMarker(type)
+  if (!marker || !source.startsWith(marker)) return null
+  return source.slice(marker.length)
+}
+
+export function headingBodyRange(type: string, value: string, start: number, end: number) {
+  const marker = headingMarker(type)
+  if (!marker || !value.startsWith(marker)) return null
+  return {
+    marker,
+    value: value.slice(marker.length),
+    start: Math.max(0, start - marker.length),
+    end: Math.max(0, end - marker.length),
+  }
+}
+
 export function blocksToMarkdown(blocks: Block[]): string {
   return blocks
     .map((block) => {

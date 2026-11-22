@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "@/lib/utils"
-import { escapeHtml, parseTableMarkdownToHtml, renderInlineMarkdown } from "./utils"
+import { escapeHtml, headingMarker, parseTableMarkdownToHtml, renderInlineMarkdown, storedHeadingContent } from "./utils"
 import { renderCodeBlockInnerHtml } from "@/lib/code-highlighting"
 import type { Block as BlockType } from "./types"
 import mermaid from "mermaid"
@@ -42,6 +42,7 @@ export const Block = memo(function Block({
 }: BlockProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [isEditing, setIsEditing] = useState(false)
+  const [editSource, setEditSource] = useState<string | null>(null)
   // Local content state for immediate UI response
   const [localContent, setLocalContent] = useState(block.content)
   const contentRef = useRef(block.content)
@@ -52,14 +53,25 @@ export const Block = memo(function Block({
   }), [mermaidSvg, block.content])
 
   useEffect(() => {
-    if (!isActive) setIsEditing(false)
+    if (!isActive) {
+      setIsEditing(false)
+      setEditSource(null)
+    }
   }, [isActive])
 
-  // Sync local content when block content changes externally
+  // Sync local content when block content changes externally.
+  // Keep a heading source line in sync only while its marker is unchanged, so toolbar edits show up and blur does not drop them.
   useEffect(() => {
     setLocalContent(block.content)
     contentRef.current = block.content
-  }, [block.content])
+    const marker = headingMarker(block.type)
+    if (!isEditing || !marker) return
+    setEditSource((current) => {
+      if (current !== null && !current.startsWith(marker)) return current
+      const next = marker + block.content
+      return current === next ? current : next
+    })
+  }, [block.content, block.type, isEditing])
 
   // Auto-resize textarea
   useEffect(() => {
@@ -68,14 +80,23 @@ export const Block = memo(function Block({
 
     textarea.style.height = "auto"
     textarea.style.height = `${textarea.scrollHeight}px`
-  }, [localContent, isEditing])
+  }, [localContent, isEditing, editSource])
 
-  // Auto-focus when entering edit mode
+  // Auto-focus when entering edit mode. Land after the heading marker so the first key does not change the level.
   useEffect(() => {
-    if (isEditing && textareaRef.current) {
-      textareaRef.current.focus()
+    if (!isEditing || !textareaRef.current) return
+    const textarea = textareaRef.current
+    const marker = headingMarker(block.type)
+    const place = () => {
+      textarea.focus()
+      if (!marker) return
+      const pos = Math.min(marker.length, textarea.value.length)
+      textarea.setSelectionRange(pos, pos)
     }
-  }, [isEditing])
+    place()
+    const frame = requestAnimationFrame(place)
+    return () => cancelAnimationFrame(frame)
+  }, [isEditing, block.type])
 
   // Render mermaid diagram when in view mode
   useEffect(() => {
@@ -126,14 +147,30 @@ export const Block = memo(function Block({
 
   const handleClick = useCallback(() => {
     if (!isEditing) {
+      const marker = headingMarker(block.type)
+      if (marker) setEditSource(marker + contentRef.current)
       setIsEditing(true)
     }
     onClick?.(block.id)
-  }, [block.id, isEditing, onClick])
+  }, [block.id, block.type, isEditing, onClick])
+
+  const publishHeadingSource = useCallback((source: string) => {
+    setEditSource(source)
+    const stored = storedHeadingContent(block.type, source)
+    // shortcut: marker edits stay local until blur, save still writes the previous heading
+    if (stored === null) return
+    setLocalContent(stored)
+    contentRef.current = stored
+    onUpdate(block.id, stored)
+  }, [block.type, onUpdate])
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const newValue = e.target.value
+      if (headingMarker(block.type)) {
+        publishHeadingSource(newValue)
+        return
+      }
       setLocalContent(newValue)
       contentRef.current = newValue
 
@@ -141,7 +178,7 @@ export const Block = memo(function Block({
       // observe a pending block-local debounce.
       onUpdate(block.id, newValue)
     },
-    [block.id, onUpdate]
+    [block.id, block.type, onUpdate, publishHeadingSource]
   )
 
   const handleKeyDown = useCallback(
@@ -163,9 +200,13 @@ export const Block = memo(function Block({
         const value = textarea.value
 
         const newValue = value.substring(0, start) + "  " + value.substring(end)
-        setLocalContent(newValue)
-        contentRef.current = newValue
-        onUpdate(block.id, newValue)
+        if (headingMarker(block.type)) {
+          publishHeadingSource(newValue)
+        } else {
+          setLocalContent(newValue)
+          contentRef.current = newValue
+          onUpdate(block.id, newValue)
+        }
 
         requestAnimationFrame(() => {
           textarea.selectionStart = textarea.selectionEnd = start + 2
@@ -173,7 +214,7 @@ export const Block = memo(function Block({
         return
       }
     },
-    [block.id, block.content, onUpdate]
+    [block.id, block.type, block.content, onUpdate, publishHeadingSource]
   )
 
   // Render content based on block type
@@ -186,7 +227,6 @@ export const Block = memo(function Block({
       return (
         <textarea
           ref={textareaRef}
-          value={localContent}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           onBlur={handleBlur}
@@ -194,16 +234,12 @@ export const Block = memo(function Block({
           className={cn(
             "w-full bg-transparent outline-none resize-none min-h-[1.5em]",
             (block.type === "code" || block.type === "mermaid") && "font-mono text-sm",
-            block.type === "heading1" && "text-3xl font-bold",
-            block.type === "heading2" && "text-2xl font-semibold",
-            block.type === "heading3" && "text-xl font-semibold",
-            block.type === "heading4" && "text-lg font-semibold",
-            block.type === "heading5" && "text-base font-semibold",
-            block.type === "heading6" && "text-sm font-semibold",
+            headingMarker(block.type) && "text-base font-normal",
             "placeholder:text-muted-foreground"
           )}
           style={{ minHeight: "1.5em" }}
           placeholder="输入内容..."
+          value={headingMarker(block.type) ? (editSource ?? headingMarker(block.type) + localContent) : localContent}
         />
       )
     }

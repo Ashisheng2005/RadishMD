@@ -6,7 +6,7 @@ import { openExternalTarget } from "@/lib/runtime"
 import { ImageLightbox } from "./image-lightbox"
 import { Toolbar, type FormatType } from "./toolbar"
 import { Block } from "./blocks"
-import { parseMarkdownToBlocks, blocksToMarkdown } from "./blocks/utils"
+import { parseMarkdownToBlocks, blocksToMarkdown, headingBodyRange, headingMarker } from "./blocks/utils"
 import type { Block as BlockType } from "./blocks/types"
 import {
   applyTextInsertion,
@@ -92,16 +92,40 @@ export function WysiwygEditor() {
     )
   }, [commitBlocks])
 
+  const replaceBlockSource = useCallback((blockId: string, source: string) => {
+    const block = blocksRef.current.find((item) => item.id === blockId)
+    if (!block) return
+    const parsed = parseMarkdownToBlocks(source)
+    if (parsed.length === 1 && parsed[0].type === block.type && parsed[0].content === block.content &&
+      parsed[0].language === block.language && parsed[0].checked === block.checked) return
+    const next = blocksRef.current.slice()
+    const idx = next.findIndex((item) => item.id === blockId)
+    if (idx === -1) return
+    next.splice(idx, 1, ...parsed.map((item, index) => ({
+      ...item,
+      id: index === 0 ? block.id : `block-${crypto.randomUUID()}`,
+    })))
+    commitBlocks(next, true)
+  }, [commitBlocks])
+
   // Normalize structure on blur/Escape, never while the user is typing.
   const commitBlockStructure = useCallback((blockId: string) => {
     const block = blocksRef.current.find((b) => b.id === blockId)
     if (!block) return
+    const textarea = editorRef.current?.querySelector(
+      `[data-block-id="${blockId}"] textarea`,
+    ) as HTMLTextAreaElement | null
+    // Heading edit buffer is the source line. Serializing the stored block would put the old marker back.
+    if (block.type.startsWith("heading") && textarea) {
+      replaceBlockSource(blockId, textarea.value)
+      return
+    }
     const parsed = parseMarkdownToBlocks(blocksToMarkdown([block]))
     if (parsed.length !== 1 || parsed[0].type !== block.type || parsed[0].content !== block.content ||
       parsed[0].language !== block.language || parsed[0].checked !== block.checked) {
       commitBlocks(blocksRef.current, true)
     }
-  }, [commitBlocks])
+  }, [commitBlocks, replaceBlockSource])
 
   const activateBlock = useCallback((blockId: string) => {
     const previousId = activeBlockIdRef.current
@@ -123,29 +147,39 @@ export function WysiwygEditor() {
       const start = textarea.selectionStart
       const end = textarea.selectionEnd
       const fullText = textarea.value
-      const selectedText = fullText.slice(start, end)
+      const block = blocksRef.current.find((item) => item.id === activeBlockId)
+      const body = block ? headingBodyRange(block.type, fullText, start, end) : null
+      const text = body ? body.value : fullText
+      const selStart = body ? body.start : start
+      const selEnd = body ? body.end : end
+      const selectedText = text.slice(selStart, selEnd)
 
       let newContent: string
       let newCursorPos: number | null = null
 
       if (selectedText) {
-        newContent = fullText.slice(0, start) + before + selectedText + after + fullText.slice(end)
-        newCursorPos = start + before.length + selectedText.length + after.length
+        newContent = text.slice(0, selStart) + before + selectedText + after + text.slice(selEnd)
+        newCursorPos = selStart + before.length + selectedText.length + after.length
       } else {
-        newContent = fullText.slice(0, start) + before + after + fullText.slice(start)
-        newCursorPos = start + before.length
+        newContent = text.slice(0, selStart) + before + after + text.slice(selStart)
+        newCursorPos = selStart + before.length
       }
 
+      if (block && headingMarker(block.type) && !body) {
+        replaceBlockSource(activeBlockId, newContent)
+        return
+      }
       updateBlock(activeBlockId, newContent)
 
       requestAnimationFrame(() => {
         textarea.focus()
         if (newCursorPos !== null) {
-          textarea.selectionStart = textarea.selectionEnd = newCursorPos
+          const offset = body ? body.marker.length : 0
+          textarea.selectionStart = textarea.selectionEnd = newCursorPos + offset
         }
       })
     },
-    [activeBlockId, updateBlock]
+    [activeBlockId, replaceBlockSource, updateBlock]
   )
 
   // Toggle line prefix (for lists, quotes, headings)
@@ -222,21 +256,33 @@ export function WysiwygEditor() {
     captured: { blockId: string; value: string; start: number; end: number },
     insertion: MarkdownInsertion,
   ) => {
-    const applied = applyTextInsertion(captured.value, captured.start, captured.end, insertion)
     const currentBlocks = blocksRef.current
     const match = currentBlocks.find((block) => block.id === captured.blockId)
-      ?? currentBlocks.find((block) => block.content === captured.value)
+      ?? currentBlocks.find((block) => block.content === captured.value || headingMarker(block.type) + block.content === captured.value)
     if (!match) return
 
+    const body = headingBodyRange(match.type, captured.value, captured.start, captured.end)
+    if (headingMarker(match.type) && !body) {
+      const applied = applyTextInsertion(captured.value, captured.start, captured.end, insertion)
+      replaceBlockSource(match.id, applied.value)
+      return
+    }
+    const applied = applyTextInsertion(
+      body ? body.value : captured.value,
+      body ? body.start : captured.start,
+      body ? body.end : captured.end,
+      insertion,
+    )
     updateBlock(match.id, applied.value)
     requestAnimationFrame(() => {
       const textarea = editorRef.current?.querySelector(
         `[data-block-id="${match.id}"] textarea`,
       ) as HTMLTextAreaElement | null
       textarea?.focus()
-      textarea?.setSelectionRange(applied.selectionStart, applied.selectionEnd)
+      const offset = body ? body.marker.length : 0
+      textarea?.setSelectionRange(applied.selectionStart + offset, applied.selectionEnd + offset)
     })
-  }, [updateBlock])
+  }, [replaceBlockSource, updateBlock])
 
   const insertLink = useCallback(() => {
     const captured = captureActiveSelection()
@@ -524,6 +570,11 @@ export function WysiwygEditor() {
         const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null
         if (textarea) {
           textarea.focus()
+          const marker = headingMarker(el.getAttribute("data-block-type") ?? "")
+          if (marker) {
+            const pos = Math.min(marker.length, textarea.value.length)
+            textarea.setSelectionRange(pos, pos)
+          }
         }
       }
     })

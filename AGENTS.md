@@ -25,6 +25,9 @@ Both modes edit with a native `<textarea>`. `@codemirror/*` is installed and unu
 
 - Split preview: `src/lib/markdown-render.ts` inside `src/workers/markdown-render-worker.ts`. The worker cannot touch `window`, `convertFileSrc`, KaTeX, or Mermaid.
 - WYSIWYG: `src/components/editor/blocks/utils.ts`.
+- A single newline inside a block is a hard break (`\n` → `<br>`), not a CommonMark soft break. Convert after emphasis and math: those regexes stop at a real newline (`[^*\n]`, `[^_\n]`, `[^$\n]`). Converting first makes `file_name` / `other_file` italic and sends `<br>` into KaTeX.
+- A blank line ends a quote unless the next line is still a quote. Swallowing that separator becomes a trailing `<br>` inside the quote.
+- Split returns a paragraph that starts with `<` raw, so those newlines still collapse. WYSIWYG shows them because the render div is `whitespace-pre-wrap`. Do not inject `<br>` inside a tag.
 - Main-thread post-process in `markdown-renderer.tsx`: `resolveImagePathsInHtml`, `renderMathInHtml`, `renderMermaidInContainer`. `buildImageTag()` does not resolve paths.
 - Split escapes HTML before the image/link regexes, so `<dest>` is `&lt;dest&gt;` there. WYSIWYG matches raw `<dest>`. A destination fix must update both files and `parseImageReference()` in `src/lib/image-utils.ts`.
 - Local images and PDFs use the asset protocol (`convertFileSrc`). New external assets also need a CSP change in `tauri.conf.json`; production CSP failures are silent.
@@ -41,12 +44,18 @@ Shared helpers are `src/lib/markdown-insert.ts`. Both `split-editor.tsx` and `wy
 
 ## Export
 
-另存为是副本，不切换当前标签，也不清脏标记。入口在标题栏，快捷键 `Ctrl+Alt+S`。`Ctrl+S` 仍只保存当前文件。对话框过滤器是 Markdown、文本、HTML、PDF。扩展名以返回路径为准；没有扩展名就中止。
+Save As writes a copy. It does not switch the tab or clear dirty. Entry is the title-bar button and `Ctrl+Alt+S`. The `Ctrl+S` handler must ignore Alt, or Save As also saves. `Ctrl+Shift+S` is strikethrough. A new file with no path still binds one through `saveFileAs` on `Ctrl+S`; that path rebinds the tab. Save As does not. Vite-only `npm run dev` cannot open the dialog or write the file.
 
-- `txt` / `md` / `markdown`：当前缓冲区原样写入。`.txt` 不去掉 Markdown 标记。
-- `html` / `pdf`：同一份渲染结果。公式、本地图片和浅色 Mermaid 在隐藏的 `export` 窗口里完成。隐藏窗口不挂 `App`，否则会再读一次 session。
-- 目标路径已经是打开的标签，或当前文件是 PDF，就拒绝。
-- PDF 不走 `write_file_atomic`。Windows 用 WebView2 `PrintToPdf`，macOS 用 `WKWebView.createPDF`，Linux 用接受 PDF 的虚拟打印机写 `file://`。一次只能导出一份。
+The dialog is the existing `save()`. The returned path's extension picks the writer. No extension: stop. Filters: `md`/`markdown`, `txt`, `html`, `pdf`. After the dialog returns, read the node again — the object captured before the dialog is stale, so a tab that finished loading during the dialog exports empty and toasts success. If `fileNeedsDiskLoad`, refuse. Refuse an open-tab target path, and a PDF source.
+
+- `txt` / `md` / `markdown`: raw buffer through `write_file_atomic`. `.txt` keeps Markdown marks.
+- `html` / `pdf`: one rendered fragment. Inline a local image by replacing only the matched `<img>` tag. Replacing the path string rewrites body text that mentions the same name.
+
+Render in a second window labeled `export`. `main.tsx` mounts `ExportPage` for that label and must not mount `App` (a second session restore). Add `export` to `capabilities/default.json` `windows`, or the page cannot invoke. Create the window visible so WebView2 loads, then `hide()` on page-load Finished. A window created hidden prints a blank PDF. A window left at a negative position is clamped on screen and covers the editor.
+
+Wait `document.fonts.ready` before signaling ready. Printing earlier drops the embedded Chinese font (`src/assets/fonts/NotoSansSC-Regular.woff2`, simplified subset). Mermaid failures go in `textContent`, not `innerHTML`.
+
+PDF does not use `write_file_atomic`. Windows: `ICoreWebView2_7::PrintToPdf`. macOS: `WKWebView.createPDF`. Linux: a virtual printer that accepts PDF, `output-uri` as `file://` — do not match the localized name "Print to File". The print callback runs on the UI thread; the command waits on another thread. One export at a time.
 
 ## Persistence
 
